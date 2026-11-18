@@ -46,17 +46,17 @@ acpc
 On Linux and macOS:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/AkaraChen/acpc/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/jimmyrogue/acpc/main/install.sh | sh
 ```
 
 On Windows (PowerShell):
 
 ```powershell
-irm https://raw.githubusercontent.com/AkaraChen/acpc/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/jimmyrogue/acpc/main/install.ps1 | iex
 ```
 
 The script downloads the latest
-[release](https://github.com/AkaraChen/acpc/releases) for your platform,
+[release](https://github.com/jimmyrogue/acpc/releases) for your platform,
 verifies its checksum and installs `acpc` into `~/.local/bin`
 (`%LOCALAPPDATA%\Programs\acpc` on Windows). Set `ACPC_VERSION=v0.1.0` to
 pin a release or `ACPC_INSTALL_DIR` to install elsewhere. Run it again to
@@ -75,7 +75,7 @@ You need Rust (the toolchain installs itself from `rust-toolchain.toml`),
 `git`, a C compiler, OpenSSL headers and [just](https://github.com/casey/just).
 
 ```sh
-git clone https://github.com/AkaraChen/acpc && cd acpc
+git clone https://github.com/jimmyrogue/acpc && cd acpc
 scripts/sync-upstream          # fetch Codex at the pinned commit, apply patches/
 just build                     # → target/debug/acpc
 ```
