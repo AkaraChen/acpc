@@ -1,0 +1,485 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: jimmyL <tliang92@gmail.com>
+Date: Wed, 18 Nov 2026 16:51:03 +0800
+Subject: [PATCH] acpc: Other option in elicitation forms
+
+A select whose free-text companion the bridge names in
+_meta["acpc/otherFields"] gets an Other option. The companion field is
+only asked for once Other is picked, so picking a listed option no longer
+leads to a text box, and each question counts as one field.
+---
+ .../src/bottom_pane/mcp_server_elicitation.rs | 336 +++++++++++++++++-
+ 1 file changed, 323 insertions(+), 13 deletions(-)
+
+diff --git a/codex-rs/tui/src/bottom_pane/mcp_server_elicitation.rs b/codex-rs/tui/src/bottom_pane/mcp_server_elicitation.rs
+index f1fa5fd..a77fd59 100644
+--- a/codex-rs/tui/src/bottom_pane/mcp_server_elicitation.rs
++++ b/codex-rs/tui/src/bottom_pane/mcp_server_elicitation.rs
+@@ -80,6 +80,12 @@ const TOOL_ID_KEY: &str = "tool_id";
+ const TOOL_SUGGEST_SUGGEST_TYPE_KEY: &str = "suggest_type";
+ const TOOL_SUGGEST_REASON_KEY: &str = "suggest_reason";
+ const TOOL_SUGGEST_INSTALL_URL_KEY: &str = "install_url";
++/// acpc: request `_meta` key the bridge sets to `{select_id: other_id}`, pairing
++/// a select with its optional free-text "Other" field (an agent's
++/// type-your-own-answer box).
++const ACPC_OTHER_FIELDS_META_KEY: &str = "acpc/otherFields";
++/// acpc: value of the "Other" option added to a select that has one.
++const ACPC_OTHER_OPTION_VALUE: &str = "\u{0}acpc-other";
+ 
+ #[derive(Clone, PartialEq, Default)]
+ struct ComposerDraft {
+@@ -195,6 +201,8 @@ pub(crate) struct McpServerElicitationFormRequest {
+     is_tool_approval: bool,
+     fields: Vec<McpServerElicitationField>,
+     tool_suggestion: Option<ToolSuggestionRequest>,
++    /// acpc: `(select, other)` field indices; see `link_other_fields`.
++    other_fields: Vec<(usize, usize)>,
+ }
+ 
+ #[derive(Default)]
+@@ -266,7 +274,7 @@ impl McpServerElicitationFormRequest {
+             Vec::new()
+         };
+ 
+-        let (response_mode, fields) = if tool_suggestion.is_some() && is_message_only_schema {
++        let (response_mode, mut fields) = if tool_suggestion.is_some() && is_message_only_schema {
+             (McpServerElicitationResponseMode::FormContent, Vec::new())
+         } else if is_message_only_schema {
+             let allow_description = if is_tool_approval_action {
+@@ -342,6 +350,7 @@ impl McpServerElicitationFormRequest {
+                 parse_fields_from_schema(&requested_schema)?,
+             )
+         };
++        let other_fields = link_other_fields(meta, &mut fields);
+ 
+         Some(Self {
+             thread_id,
+@@ -353,6 +362,7 @@ impl McpServerElicitationFormRequest {
+             is_tool_approval,
+             fields,
+             tool_suggestion,
++            other_fields,
+         })
+     }
+ 
+@@ -532,6 +542,56 @@ fn format_tool_approval_display_param_value(value: &Value) -> String {
+     truncate_text(&formatted, APPROVAL_TOOL_PARAM_VALUE_TRUNCATE_GRAPHEMES)
+ }
+ 
++/// acpc: pair each select with its free-text "Other" field (named by the bridge
++/// in `_meta`) and give the select an "Other" option. The Other field is only
++/// asked for once that option is picked, so choosing a listed option no longer
++/// leads to a text box, and each question counts as one field.
++fn link_other_fields(
++    meta: Option<&Value>,
++    fields: &mut [McpServerElicitationField],
++) -> Vec<(usize, usize)> {
++    let Some(pairs) = meta
++        .and_then(|meta| meta.get(ACPC_OTHER_FIELDS_META_KEY))
++        .and_then(Value::as_object)
++    else {
++        return Vec::new();
++    };
++    let mut links = Vec::new();
++    for (select_id, other_id) in pairs {
++        let Some(other_id) = other_id.as_str() else {
++            continue;
++        };
++        let Some(other_idx) = fields.iter().position(|field| {
++            field.id == other_id
++                && matches!(field.input, McpServerElicitationFieldInput::Text { .. })
++        }) else {
++            continue;
++        };
++        let Some(select_idx) = fields.iter().position(|field| &field.id == select_id) else {
++            continue;
++        };
++        let Some(select) = fields.get_mut(select_idx) else {
++            continue;
++        };
++        let options = match &mut select.input {
++            McpServerElicitationFieldInput::Select { options, .. }
++            | McpServerElicitationFieldInput::MultiSelect { options, .. } => options,
++            _ => continue,
++        };
++        options.push(McpServerElicitationOption {
++            label: "Other".to_string(),
++            description: Some("Type your own answer".to_string()),
++            value: Value::String(ACPC_OTHER_OPTION_VALUE.to_string()),
++        });
++        links.push((select_idx, other_idx));
++    }
++    links
++}
++
++fn is_other_option(option: &McpServerElicitationOption) -> bool {
++    option.value.as_str() == Some(ACPC_OTHER_OPTION_VALUE)
++}
++
+ fn parse_fields_from_schema(requested_schema: &Value) -> Option<Vec<McpServerElicitationField>> {
+     let schema = requested_schema.as_object()?;
+     if schema.get("type").and_then(Value::as_str) != Some("object") {
+@@ -1038,14 +1098,15 @@ impl McpServerElicitationOverlay {
+ 
+     fn footer_tips(&self) -> Vec<Line<'static>> {
+         let mut tips = Vec::new();
+-        let is_last_field = self.current_index().saturating_add(1) >= self.field_count();
++        let is_last_field = self.next_shown_field().is_none();
++        let (_, shown_fields) = self.shown_field_progress();
+         let submit_hint = if self.current_field_is_select() {
+             self.list_keymap.primary_hint(ListAction::Accept)
+         } else {
+             self.composer_submit_hint
+         };
+         if let Some(submit_hint) = submit_hint.map(ShortcutHint::display_label) {
+-            if self.field_count() == 1 {
++            if shown_fields == 1 {
+                 tips.push(shortcut(&submit_hint, "to submit"));
+             } else if is_last_field {
+                 tips.push(shortcut(&submit_hint, "to submit all"));
+@@ -1053,7 +1114,7 @@ impl McpServerElicitationOverlay {
+                 tips.push(shortcut(&submit_hint, "to submit answer"));
+             }
+         }
+-        if self.field_count() > 1 {
++        if shown_fields > 1 {
+             if self.current_field_is_select() {
+                 tips.push(shortcut("←/→", "to navigate fields"));
+             } else {
+@@ -1117,7 +1178,14 @@ impl McpServerElicitationOverlay {
+         }
+         self.save_current_draft();
+         let offset = if next { 1 } else { len.saturating_sub(1) };
+-        self.current_idx = (self.current_idx + offset) % len;
++        let mut idx = self.current_idx;
++        for _ in 0..len {
++            idx = (idx + offset) % len;
++            if self.is_field_shown(idx) {
++                break;
++            }
++        }
++        self.current_idx = idx;
+         self.validation_error = None;
+         self.restore_current_draft();
+     }
+@@ -1131,16 +1199,77 @@ impl McpServerElicitationOverlay {
+         self.restore_current_draft();
+     }
+ 
++    /// acpc: the select whose "Other" option leads to field `idx`, if any.
++    fn other_field_owner(&self, idx: usize) -> Option<usize> {
++        self.request
++            .other_fields
++            .iter()
++            .find(|(_, other)| *other == idx)
++            .map(|(select, _)| *select)
++    }
++
++    /// acpc: whether the "Other" option of select `idx` is picked.
++    fn other_option_picked(&self, idx: usize) -> bool {
++        let (Some(field), Some(answer)) = (self.request.fields.get(idx), self.answers.get(idx))
++        else {
++            return false;
++        };
++        match &field.input {
++            McpServerElicitationFieldInput::Select { options, .. } => {
++                answer.answer_committed
++                    && answer
++                        .selection
++                        .selected_idx
++                        .and_then(|selected| options.get(selected))
++                        .is_some_and(is_other_option)
++            }
++            McpServerElicitationFieldInput::MultiSelect { options, .. } => options
++                .iter()
++                .zip(&answer.checked)
++                .any(|(option, checked)| *checked && is_other_option(option)),
++            _ => false,
++        }
++    }
++
++    /// acpc: an "Other" field is shown only while its select has Other picked.
++    fn is_field_shown(&self, idx: usize) -> bool {
++        self.other_field_owner(idx)
++            .is_none_or(|select| self.other_option_picked(select))
++    }
++
++    /// acpc: the next shown field after the current one.
++    fn next_shown_field(&self) -> Option<usize> {
++        (self.current_index() + 1..self.field_count()).find(|idx| self.is_field_shown(*idx))
++    }
++
++    /// acpc: shown fields, and the current one's position among them.
++    fn shown_field_progress(&self) -> (usize, usize) {
++        let shown = (0..self.field_count())
++            .filter(|idx| self.is_field_shown(*idx))
++            .count();
++        let position = (0..=self.current_index())
++            .filter(|idx| self.is_field_shown(*idx))
++            .count();
++        (position.max(1), shown)
++    }
++
+     fn field_value(&self, idx: usize) -> Option<Value> {
+         let field = self.request.fields.get(idx)?;
+         let answer = self.answers.get(idx)?;
++        if !self.is_field_shown(idx) {
++            return None;
++        }
+         match &field.input {
+             McpServerElicitationFieldInput::Select { options, .. } => {
+                 if !answer.answer_committed {
+                     return None;
+                 }
+                 let selected_idx = answer.selection.selected_idx?;
+-                options.get(selected_idx).map(|option| option.value.clone())
++                // acpc: with Other picked, the Other field carries the answer.
++                options
++                    .get(selected_idx)
++                    .filter(|option| !is_other_option(option))
++                    .map(|option| option.value.clone())
+             }
+             McpServerElicitationFieldInput::Text { .. } => {
+                 if !answer.answer_committed {
+@@ -1169,7 +1298,7 @@ impl McpServerElicitationOverlay {
+                     options
+                         .iter()
+                         .zip(&answer.checked)
+-                        .filter(|(_, checked)| **checked)
++                        .filter(|(option, checked)| **checked && !is_other_option(option))
+                         .map(|(option, _)| option.value.clone())
+                         .collect(),
+                 ))
+@@ -1373,10 +1502,12 @@ impl McpServerElicitationOverlay {
+     }
+ 
+     fn go_next_or_submit(&mut self) {
+-        if self.current_index() + 1 >= self.field_count() {
+-            self.submit_answers();
+-        } else {
+-            self.move_field(/*next*/ true);
++        match self.next_shown_field() {
++            Some(idx) => {
++                self.validation_error = None;
++                self.jump_to_field(idx);
++            }
++            None => self.submit_answers(),
+         }
+     }
+ 
+@@ -1575,8 +1706,7 @@ impl Renderable for McpServerElicitationOverlay {
+ 
+         let unanswered = self.required_unanswered_count();
+         let progress_line = if self.field_count() > 0 {
+-            let idx = self.current_index() + 1;
+-            let total = self.field_count();
++            let (idx, total) = self.shown_field_progress();
+             let base = format!("Field {idx}/{total}");
+             if unanswered > 0 {
+                 Line::from(format!("{base} ({unanswered} required unanswered)").dim())
+@@ -2068,6 +2198,7 @@ mod tests {
+                     },
+                 }],
+                 tool_suggestion: None,
++                other_fields: Vec::new(),
+             }
+         );
+     }
+@@ -2152,6 +2283,7 @@ mod tests {
+                     },
+                 }],
+                 tool_suggestion: None,
++                other_fields: Vec::new(),
+             }
+         );
+     }
+@@ -2205,6 +2337,7 @@ mod tests {
+                     },
+                 }],
+                 tool_suggestion: None,
++                other_fields: Vec::new(),
+             }
+         );
+     }
+@@ -3044,4 +3177,181 @@ mod tests {
+             render_snapshot(&overlay, Rect::new(0, 0, 120, 16))
+         );
+     }
++
++    /// acpc: the form claude-agent-acp sends for AskUserQuestion: each
++    /// question is a select plus an optional free-text "Other" field.
++    fn ask_user_question_request(
++        tx: AppEventSender,
++        properties: Value,
++        other_fields: Value,
++    ) -> McpServerElicitationOverlay {
++        let request = from_form_request(
++            ThreadId::default(),
++            form_request(
++                "Please answer the following questions.",
++                serde_json::json!({"type": "object", "properties": properties}),
++                Some(serde_json::json!({ACPC_OTHER_FIELDS_META_KEY: other_fields})),
++            ),
++        )
++        .expect("supported form");
++        McpServerElicitationOverlay::new(
++            request, tx, /*has_input_focus*/ true, /*enhanced_keys_supported*/ false,
++            /*disable_paste_burst*/ true,
++        )
++    }
++
++    fn select_question(title: &str) -> Value {
++        serde_json::json!({
++            "type": "string",
++            "title": title,
++            "oneOf": [
++                {"const": "Postgres", "title": "Postgres"},
++                {"const": "SQLite", "title": "SQLite"},
++            ],
++        })
++    }
++
++    fn other_box() -> Value {
++        serde_json::json!({"type": "string", "title": "Other"})
++    }
++
++    fn submitted_content(rx: &mut UnboundedReceiver<AppEvent>) -> Value {
++        let Ok(AppEvent::SubmitThreadOp { op, .. }) = rx.try_recv() else {
++            panic!("expected a submitted answer");
++        };
++        let Op::ResolveElicitation {
++            decision, content, ..
++        } = op
++        else {
++            panic!("expected ResolveElicitation");
++        };
++        assert_eq!(decision, McpServerElicitationAction::Accept);
++        content.expect("content")
++    }
++
++    #[test]
++    fn picking_a_listed_option_skips_the_other_box() {
++        let (tx, mut rx) = test_sender();
++        let mut overlay = ask_user_question_request(
++            tx,
++            serde_json::json!({
++                "question_0": select_question("Database"),
++                "question_0_custom": other_box(),
++                "question_1": select_question("Cache"),
++                "question_1_custom": other_box(),
++            }),
++            serde_json::json!({
++                "question_0": "question_0_custom",
++                "question_1": "question_1_custom",
++            }),
++        );
++        assert_eq!(overlay.shown_field_progress(), (1, 2));
++        assert_eq!(
++            overlay
++                .current_options()
++                .iter()
++                .map(|option| option.label.as_str())
++                .collect::<Vec<_>>(),
++            vec!["Postgres", "SQLite", "Other"]
++        );
++
++        overlay.handle_key_event(KeyCode::Enter.into());
++        assert_eq!(
++            overlay.current_field().map(|f| f.id.as_str()),
++            Some("question_1")
++        );
++        assert_eq!(overlay.shown_field_progress(), (2, 2));
++        overlay.handle_key_event(KeyCode::Char('2').into());
++
++        assert_eq!(
++            submitted_content(&mut rx),
++            serde_json::json!({"question_0": "Postgres", "question_1": "SQLite"})
++        );
++    }
++
++    #[test]
++    fn picking_other_asks_for_the_typed_answer() {
++        let (tx, mut rx) = test_sender();
++        let mut overlay = ask_user_question_request(
++            tx,
++            serde_json::json!({
++                "question_0": select_question("Database"),
++                "question_0_custom": other_box(),
++            }),
++            serde_json::json!({"question_0": "question_0_custom"}),
++        );
++        overlay.handle_key_event(KeyCode::Char('3').into());
++        assert_eq!(
++            overlay.current_field().map(|f| f.id.as_str()),
++            Some("question_0_custom")
++        );
++        assert_eq!(overlay.shown_field_progress(), (2, 2));
++        overlay.handle_paste("MySQL".to_string());
++        overlay.handle_key_event(KeyCode::Enter.into());
++
++        assert_eq!(
++            submitted_content(&mut rx),
++            serde_json::json!({"question_0_custom": "MySQL"})
++        );
++    }
++
++    #[test]
++    fn multi_select_other_is_a_checkbox_that_leads_to_the_box() {
++        let (tx, mut rx) = test_sender();
++        let mut overlay = ask_user_question_request(
++            tx,
++            serde_json::json!({
++                "question_0": {
++                    "type": "array",
++                    "title": "Features",
++                    "items": {"anyOf": [
++                        {"const": "Auth", "title": "Auth"},
++                        {"const": "Search", "title": "Search"},
++                    ]},
++                },
++                "question_0_custom": other_box(),
++            }),
++            serde_json::json!({"question_0": "question_0_custom"}),
++        );
++        overlay.handle_key_event(KeyCode::Char('1').into());
++        overlay.handle_key_event(KeyCode::Char('3').into());
++        overlay.handle_key_event(KeyCode::Enter.into());
++        assert_eq!(
++            overlay.current_field().map(|f| f.id.as_str()),
++            Some("question_0_custom")
++        );
++        overlay.handle_paste("Billing".to_string());
++        overlay.handle_key_event(KeyCode::Enter.into());
++
++        assert_eq!(
++            submitted_content(&mut rx),
++            serde_json::json!({"question_0": ["Auth"], "question_0_custom": "Billing"})
++        );
++    }
++
++    #[test]
++    fn forms_without_other_fields_keep_every_field() {
++        let (tx, _rx) = test_sender();
++        let request = from_form_request(
++            ThreadId::default(),
++            form_request(
++                "Two questions",
++                serde_json::json!({
++                    "type": "object",
++                    "properties": {
++                        "question_0": select_question("Database"),
++                        "question_0_custom": other_box(),
++                    },
++                }),
++                /*meta*/ None,
++            ),
++        )
++        .expect("supported form");
++        let overlay = McpServerElicitationOverlay::new(
++            request, tx, /*has_input_focus*/ true, /*enhanced_keys_supported*/ false,
++            /*disable_paste_burst*/ true,
++        );
++        assert_eq!(overlay.shown_field_progress(), (1, 2));
++        assert_eq!(overlay.current_options().len(), 2);
++    }
+ }

@@ -254,6 +254,8 @@ applied. `patches/*.patch` are the patches, in order:
 7. Upstream schema fixture tests skipped, since the fixtures don't include
    `acpc/*`.
 8. ANSI styles in ACP replies decoded before Markdown wrapping and table layout.
+9. An "Other" option in elicitation forms for a select's free-text companion
+   field (such as an AskUserQuestion "Other" box), asked for only when picked.
 
 To change upstream code:
 1. Edit and commit in `third_party/codex`.
