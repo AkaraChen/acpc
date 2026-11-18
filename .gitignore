@@ -25,3 +25,4 @@ rustc-ice-*.txt
 
 # Generated upstream checkout (see scripts/sync-upstream)
 /third_party/
+CLAUDE.md

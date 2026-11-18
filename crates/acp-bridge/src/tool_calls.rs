@@ -93,6 +93,8 @@ pub(crate) fn apply_update(call: &mut acp::ToolCall, fields: acp::ToolCallUpdate
 pub(crate) fn from_update(update: &acp::ToolCallUpdate) -> acp::ToolCall {
     let mut call = acp::ToolCall::new(update.tool_call_id.clone(), "");
     apply_update(&mut call, update.fields.clone());
+    // Keeps a subagent's parent tag (`_meta.claudeCode.parentToolUseId`).
+    call.meta.clone_from(&update.meta);
     if call.title.is_empty() {
         call.title = "Tool call".to_string();
     }

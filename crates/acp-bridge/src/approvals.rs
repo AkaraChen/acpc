@@ -467,7 +467,7 @@ pub(crate) fn on_elicitation(
         .map_or_else(|| agent.to_string(), |profile| profile.name.clone());
     let elicitation = match &request.mode {
         acp::ElicitationMode::Form(form) => {
-            let Some((requested_schema, message)) =
+            let Some((requested_schema, message, meta)) =
                 mcp_schema(&form.requested_schema, &request.message)
             else {
                 tracing::warn!(%agent, "elicitation schema cannot be shown; cancelling");
@@ -475,7 +475,7 @@ pub(crate) fn on_elicitation(
                 return;
             };
             McpServerElicitationRequest::Form {
-                meta: None,
+                meta,
                 message,
                 requested_schema,
             }
@@ -545,10 +545,20 @@ pub(crate) fn on_elicitation(
 /// presentation-only keys MCP rejects (schema title/description, string
 /// patterns, `_meta`, option descriptions): the schema text moves into the
 /// message and the rest is dropped.
+/// Request `_meta` key naming each select's free-text "Other" field, as
+/// `{select_id: other_id}` (read by the TUI form, patches/0009).
+const OTHER_FIELDS_META_KEY: &str = "acpc/otherFields";
+/// Suffix of a select's free-text companion field. claude-agent-acp sends one
+/// after every AskUserQuestion question (`question_<n>_custom`, its "Other"
+/// box); asked as its own field, it follows every pick with a text box.
+const OTHER_FIELD_SUFFIX: &str = "_custom";
+
+/// The ACP form as an MCP elicitation schema, the message to show with it, and
+/// the request `_meta` for the TUI.
 fn mcp_schema(
     schema: &acp::ElicitationSchema,
     message: &str,
-) -> Option<(McpElicitationSchema, String)> {
+) -> Option<(McpElicitationSchema, String, Option<serde_json::Value>)> {
     let mut value = serde_json::to_value(schema).ok()?;
     let object = value.as_object_mut()?;
     let mut message = message.to_string();
@@ -573,8 +583,43 @@ fn mcp_schema(
             strip_property(property);
         }
     }
+    let meta = object
+        .get("properties")
+        .and_then(serde_json::Value::as_object)
+        .map(other_fields)
+        .filter(|pairs| !pairs.is_empty())
+        .map(|pairs| serde_json::json!({ OTHER_FIELDS_META_KEY: pairs }));
     let schema = serde_json::from_value::<McpElicitationSchema>(value).ok()?;
-    Some((schema, message))
+    Some((schema, message, meta))
+}
+
+/// Selects with a free-text companion `<id>_custom`, as `{select: other}`.
+fn other_fields(
+    properties: &serde_json::Map<String, serde_json::Value>,
+) -> serde_json::Map<String, serde_json::Value> {
+    properties
+        .iter()
+        .filter(|(_, property)| is_select(property))
+        .filter_map(|(id, _)| {
+            let other = format!("{id}{OTHER_FIELD_SUFFIX}");
+            properties
+                .get(&other)
+                .filter(|property| is_free_text(property))
+                .map(|_| (id.clone(), serde_json::Value::String(other)))
+        })
+        .collect()
+}
+
+fn is_select(property: &serde_json::Value) -> bool {
+    ["oneOf", "anyOf", "enum"]
+        .iter()
+        .any(|key| property.get(key).is_some())
+        || property.get("type").and_then(serde_json::Value::as_str) == Some("array")
+}
+
+fn is_free_text(property: &serde_json::Value) -> bool {
+    property.get("type").and_then(serde_json::Value::as_str) == Some("string")
+        && !is_select(property)
 }
 
 fn strip_property(property: &mut serde_json::Value) {
@@ -616,6 +661,47 @@ mod tests {
 
     fn option(id: &str, kind: acp::PermissionOptionKind) -> acp::PermissionOption {
         acp::PermissionOption::new(id.to_string(), id, kind)
+    }
+
+    fn form_schema(value: serde_json::Value) -> acp::ElicitationSchema {
+        serde_json::from_value(value).expect("ACP form schema")
+    }
+
+    #[test]
+    fn ask_user_question_other_boxes_are_paired_with_their_questions() {
+        let schema = form_schema(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "question_0": {"type": "string", "title": "DB", "oneOf": [
+                    {"const": "Postgres", "title": "Postgres"},
+                ]},
+                "question_0_custom": {"type": "string", "title": "Other"},
+                "question_1": {"type": "array", "title": "Features", "items": {"anyOf": [
+                    {"const": "Auth", "title": "Auth"},
+                ]}},
+                "question_1_custom": {"type": "string", "title": "Other"},
+                "name": {"type": "string"},
+                "name_custom": {"type": "string"},
+            },
+        }));
+        let (_, _, meta) = mcp_schema(&schema, "Please answer").expect("schema");
+        assert_eq!(
+            meta,
+            Some(serde_json::json!({OTHER_FIELDS_META_KEY: {
+                "question_0": "question_0_custom",
+                "question_1": "question_1_custom",
+            }}))
+        );
+    }
+
+    #[test]
+    fn forms_without_other_boxes_send_no_meta() {
+        let schema = form_schema(serde_json::json!({
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+        }));
+        let (_, _, meta) = mcp_schema(&schema, "Name?").expect("schema");
+        assert_eq!(meta, None);
     }
 
     #[test]
