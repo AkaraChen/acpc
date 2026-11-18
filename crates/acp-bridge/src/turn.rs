@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use acp_client::schema as acp;
 use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::CommandExecutionOutputDeltaNotification;
+use codex_app_server_protocol::DynamicToolCallOutputContentItem;
 use codex_app_server_protocol::FileChangePatchUpdatedNotification;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
@@ -57,6 +58,15 @@ struct ToolEntry {
     finished: bool,
 }
 
+/// A tool call a subagent made. claude-agent-acp sends a subagent's calls
+/// and text in the parent session, tagged with the id of the Agent/Task call
+/// that started it (`_meta.claudeCode.parentToolUseId`). They are folded into
+/// that call's item as a progress line instead of becoming items of their own.
+struct ChildCall {
+    parent: String,
+    call: acp::ToolCall,
+}
+
 pub(crate) struct TurnBuilder {
     pub(crate) id: String,
     thread_id: String,
@@ -65,7 +75,20 @@ pub(crate) struct TurnBuilder {
     items: Vec<ThreadItem>,
     open_text: Option<OpenText>,
     tools: HashMap<String, ToolEntry>,
+    /// Subagent tool calls by call id, in the order they started.
+    children: Vec<(String, ChildCall)>,
     next_item: u64,
+}
+
+/// The Agent/Task call a subagent's update belongs to, from claude-agent-acp's
+/// `_meta.claudeCode.parentToolUseId`.
+fn parent_tool_use_id(meta: Option<&acp::Meta>) -> Option<String> {
+    meta?
+        .get("claudeCode")?
+        .get("parentToolUseId")?
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
 }
 
 pub(crate) type Emit = Vec<ServerNotification>;
@@ -80,6 +103,7 @@ impl TurnBuilder {
             items: Vec::new(),
             open_text: None,
             tools: HashMap::new(),
+            children: Vec::new(),
             next_item: 1,
         }
     }
@@ -160,11 +184,111 @@ impl TurnBuilder {
     }
 
     pub(crate) fn agent_message(&mut self, chunk: &acp::ContentChunk, emit: &mut Emit) {
+        // A subagent's text is not the answer; its report is the call's output.
+        if self.is_subagent_update(chunk.meta.as_ref()) {
+            return;
+        }
         self.text(TextKind::Message, chunk, emit);
     }
 
     pub(crate) fn agent_thought(&mut self, chunk: &acp::ContentChunk, emit: &mut Emit) {
+        if self.is_subagent_update(chunk.meta.as_ref()) {
+            return;
+        }
         self.text(TextKind::Reasoning, chunk, emit);
+    }
+
+    /// Whether an update comes from a subagent whose Agent call is running.
+    fn is_subagent_update(&self, meta: Option<&acp::Meta>) -> bool {
+        self.subagent_parent(meta).is_some()
+    }
+
+    /// The running Agent call that a subagent's update belongs to.
+    fn subagent_parent(&self, meta: Option<&acp::Meta>) -> Option<String> {
+        parent_tool_use_id(meta).filter(|parent| self.running_parent(parent))
+    }
+
+    /// Whether `key` is a running tool item that can show subagent progress.
+    fn running_parent(&self, key: &str) -> bool {
+        self.tools
+            .get(key)
+            .is_some_and(|entry| entry.kind == ItemKind::Dynamic && !entry.finished)
+    }
+
+    fn child_index(&self, key: &str) -> Option<usize> {
+        self.children.iter().position(|(child, _)| child == key)
+    }
+
+    /// Record a subagent's tool call against its running Agent call `parent`.
+    fn fold_child(&mut self, parent: String, call: acp::ToolCall, emit: &mut Emit) {
+        let key = call.tool_call_id.to_string();
+        self.children.push((
+            key,
+            ChildCall {
+                parent: parent.clone(),
+                call,
+            },
+        ));
+        self.show_progress(&parent, emit);
+    }
+
+    /// What the subagents of call `parent` have done, for its item.
+    fn progress(&self, parent: &str) -> Option<String> {
+        let calls = self
+            .children
+            .iter()
+            .filter(|(_, child)| child.parent == parent)
+            .map(|(_, child)| &child.call)
+            .collect::<Vec<_>>();
+        let latest = calls.last()?;
+        let running = calls
+            .iter()
+            .rev()
+            .find(|call| tool_calls::outcome(call) == Outcome::Running);
+        let count = match calls.len() {
+            1 => "1 tool call".to_string(),
+            n => format!("{n} tool calls"),
+        };
+        Some(match running {
+            Some(call) => format!("{count} · now: {}", call.title),
+            None => format!("{count} · last: {}", latest.title),
+        })
+    }
+
+    /// The payload of a running tool item. A dynamic item carries its
+    /// subagents' progress as output, so the TUI shows it under the call.
+    fn running_payload(&self, key: &str) -> Option<ThreadItemPayload> {
+        let entry = self.tools.get(key)?;
+        let item_id = item_id(&self.items[entry.index].payload).to_string();
+        let mut payload = tool_calls::payload(
+            &item_id,
+            entry.kind,
+            &entry.call,
+            Outcome::Running,
+            &self.cwd,
+            None,
+        );
+        if let (Some(progress), ThreadItemPayload::DynamicToolCall { content_items, .. }) =
+            (self.progress(key), &mut payload)
+        {
+            *content_items = Some(vec![DynamicToolCallOutputContentItem::InputText {
+                text: progress,
+            }]);
+        }
+        Some(payload)
+    }
+
+    /// Re-announce a running Agent call with its subagents' latest progress;
+    /// the TUI updates the call's cell in place.
+    fn show_progress(&mut self, parent: &str, emit: &mut Emit) {
+        let Some(payload) = self.running_payload(parent) else {
+            return;
+        };
+        let index = self.tools[parent].index;
+        self.items[index].payload = payload;
+        if self.tools[parent].announced {
+            self.started(index, emit);
+        }
     }
 
     fn text(&mut self, kind: TextKind, chunk: &acp::ContentChunk, emit: &mut Emit) {
@@ -259,8 +383,17 @@ impl TurnBuilder {
         emit: &mut Emit,
     ) -> (String, ItemKind) {
         let key = update.tool_call_id.to_string();
-        if !self.tools.contains_key(&key) {
-            self.tool_call(tool_calls::from_update(update), emit);
+        if let Some(index) = self.child_index(&key) {
+            // A subagent's call that needs the user (a permission request)
+            // becomes an item of its own, so the prompt has a call to show.
+            let (_, mut child) = self.children.remove(index);
+            tool_calls::apply_update(&mut child.call, update.fields.clone());
+            if self.running_parent(&child.parent) {
+                self.show_progress(&child.parent, emit);
+            }
+            self.add_tool_call(child.call, emit);
+        } else if !self.tools.contains_key(&key) {
+            self.add_tool_call(tool_calls::from_update(update), emit);
         } else {
             self.tool_call_update(update.clone(), emit);
         }
@@ -344,7 +477,19 @@ impl TurnBuilder {
 
     pub(crate) fn tool_call(&mut self, call: acp::ToolCall, emit: &mut Emit) {
         let key = call.tool_call_id.to_string();
-        if self.tools.contains_key(&key) {
+        if self.child_index(&key).is_none()
+            && !self.tools.contains_key(&key)
+            && let Some(parent) = self.subagent_parent(call.meta.as_ref())
+        {
+            self.fold_child(parent, call, emit);
+            return;
+        }
+        self.add_tool_call(call, emit);
+    }
+
+    fn add_tool_call(&mut self, call: acp::ToolCall, emit: &mut Emit) {
+        let key = call.tool_call_id.to_string();
+        if self.tools.contains_key(&key) || self.child_index(&key).is_some() {
             // Agents may re-announce a call; treat it as a full update.
             let fields = acp::ToolCallUpdateFields::new()
                 .kind(call.kind)
@@ -396,6 +541,16 @@ impl TurnBuilder {
 
     pub(crate) fn tool_call_update(&mut self, update: acp::ToolCallUpdate, emit: &mut Emit) {
         let key = update.tool_call_id.to_string();
+        if let Some(index) = self.child_index(&key) {
+            // Later updates of a subagent's call can lose the parent tag.
+            let (_, child) = &mut self.children[index];
+            tool_calls::apply_update(&mut child.call, update.fields);
+            let parent = child.parent.clone();
+            if self.running_parent(&parent) {
+                self.show_progress(&parent, emit);
+            }
+            return;
+        }
         let Some(entry) = self.tools.get_mut(&key) else {
             // An update for an unannounced call: start it from what we know.
             let call = tool_calls::from_update(&update);
@@ -420,17 +575,10 @@ impl TurnBuilder {
         match kind {
             ItemKind::Command | ItemKind::Read | ItemKind::Dynamic => {
                 // Keep the stored item current (an approval prompt shows it).
-                let entry = &self.tools[&key];
-                let index = entry.index;
-                let item_id = item_id(&self.items[index].payload).to_string();
-                self.items[index].payload = tool_calls::payload(
-                    &item_id,
-                    kind,
-                    &entry.call,
-                    Outcome::Running,
-                    &self.cwd,
-                    None,
-                );
+                let index = self.tools[&key].index;
+                if let Some(payload) = self.running_payload(&key) {
+                    self.items[index].payload = payload;
+                }
                 if kind == ItemKind::Command {
                     self.emit_output(&key, emit);
                 }
@@ -793,5 +941,146 @@ mod tests {
                 "item/completed",
             ]
         );
+    }
+
+    fn subagent_meta(parent: &str) -> acp::Meta {
+        serde_json::from_value(serde_json::json!({"claudeCode": {"parentToolUseId": parent}}))
+            .expect("meta")
+    }
+
+    fn agent_call() -> acp::ToolCall {
+        acp::ToolCall::new("agent-1", "Explore auth flow").kind(acp::ToolKind::Think)
+    }
+
+    fn child_call(id: &'static str, title: &str) -> acp::ToolCall {
+        let mut call = acp::ToolCall::new(id, title)
+            .kind(acp::ToolKind::Read)
+            .status(acp::ToolCallStatus::InProgress);
+        call.meta = Some(subagent_meta("agent-1"));
+        call
+    }
+
+    fn progress_of(turn: &TurnBuilder) -> Option<String> {
+        match turn.item_payload("t1-1")? {
+            ThreadItemPayload::DynamicToolCall {
+                content_items: Some(items),
+                ..
+            } => items.into_iter().find_map(|item| match item {
+                DynamicToolCallOutputContentItem::InputText { text } => Some(text),
+                _ => None,
+            }),
+            _ => None,
+        }
+    }
+
+    fn finish_update(id: &'static str) -> acp::ToolCallUpdate {
+        acp::ToolCallUpdate::new(
+            id,
+            acp::ToolCallUpdateFields::new().status(acp::ToolCallStatus::Completed),
+        )
+    }
+
+    #[test]
+    fn subagent_calls_fold_into_the_agent_call() {
+        let mut turn = builder();
+        let mut emit = Emit::new();
+        turn.tool_call(agent_call(), &mut emit);
+        turn.tool_call(child_call("c1", "Read src/auth.rs"), &mut emit);
+        turn.tool_call(child_call("c2", "Grep \"login\""), &mut emit);
+
+        assert_eq!(turn.items.len(), 1, "children must not become items");
+        assert_eq!(
+            progress_of(&turn).as_deref(),
+            Some("2 tool calls · now: Grep \"login\"")
+        );
+        // Each child re-announces the Agent call so the TUI cell updates.
+        assert_eq!(methods(&emit), vec!["item/started"; 3]);
+
+        let mut emit = Emit::new();
+        turn.tool_call_update(finish_update("c2"), &mut emit);
+        turn.tool_call_update(finish_update("c1"), &mut emit);
+        assert_eq!(
+            progress_of(&turn).as_deref(),
+            Some("2 tool calls · last: Grep \"login\"")
+        );
+    }
+
+    #[test]
+    fn subagent_text_is_not_the_answer() {
+        let mut turn = builder();
+        let mut emit = Emit::new();
+        turn.tool_call(agent_call(), &mut emit);
+        let mut chunk = chunk("child says hi", None);
+        chunk.meta = Some(subagent_meta("agent-1"));
+        turn.agent_message(&chunk, &mut emit);
+        turn.agent_thought(&chunk, &mut emit);
+        assert_eq!(turn.items.len(), 1);
+    }
+
+    #[test]
+    fn finished_agent_call_shows_its_report() {
+        let mut turn = builder();
+        let mut emit = Emit::new();
+        turn.tool_call(agent_call(), &mut emit);
+        turn.tool_call(child_call("c1", "Read src/auth.rs"), &mut emit);
+        let report = acp::ToolCallUpdateFields::new()
+            .status(acp::ToolCallStatus::Completed)
+            .content(vec!["Auth lives in src/auth.rs".to_string().into()]);
+        turn.tool_call_update(acp::ToolCallUpdate::new("agent-1", report), &mut emit);
+        assert_eq!(
+            progress_of(&turn).as_deref(),
+            Some("Auth lives in src/auth.rs")
+        );
+
+        // A late child update after the Agent call ended changes nothing.
+        let mut emit = Emit::new();
+        turn.tool_call_update(finish_update("c1"), &mut emit);
+        assert!(emit.is_empty());
+        assert_eq!(turn.items.len(), 1);
+    }
+
+    #[test]
+    fn calls_tagged_with_an_unknown_parent_stay_items() {
+        let mut turn = builder();
+        let mut emit = Emit::new();
+        turn.tool_call(child_call("c1", "Read src/auth.rs"), &mut emit);
+        assert_eq!(turn.items.len(), 1);
+        assert!(matches!(
+            turn.item_payload("t1-1"),
+            Some(ThreadItemPayload::DynamicToolCall { tool, .. }) if tool == "Read src/auth.rs"
+        ));
+    }
+
+    #[test]
+    fn subagent_call_first_seen_as_an_update_folds_too() {
+        let mut turn = builder();
+        let mut emit = Emit::new();
+        turn.tool_call(agent_call(), &mut emit);
+        let mut update = acp::ToolCallUpdate::new(
+            "c1",
+            acp::ToolCallUpdateFields::new()
+                .title("Read src/auth.rs".to_string())
+                .status(acp::ToolCallStatus::InProgress),
+        );
+        update.meta = Some(subagent_meta("agent-1"));
+        turn.tool_call_update(update, &mut emit);
+        assert_eq!(turn.items.len(), 1);
+        assert_eq!(
+            progress_of(&turn).as_deref(),
+            Some("1 tool call · now: Read src/auth.rs")
+        );
+    }
+
+    #[test]
+    fn subagent_call_needing_permission_becomes_an_item() {
+        let mut turn = builder();
+        let mut emit = Emit::new();
+        turn.tool_call(agent_call(), &mut emit);
+        turn.tool_call(child_call("c1", "Read src/auth.rs"), &mut emit);
+        let update = acp::ToolCallUpdate::new("c1", acp::ToolCallUpdateFields::new());
+        let (item_id, _) = turn.tool_item(&update, &mut emit);
+        assert_eq!(item_id, "t1-2");
+        assert_eq!(turn.items.len(), 2);
+        assert_eq!(progress_of(&turn), None);
     }
 }
