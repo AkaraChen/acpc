@@ -1,14 +1,14 @@
 #!/bin/sh
 # Install the latest acpc release.
 #
-#   curl -fsSL https://raw.githubusercontent.com/AkaraChen/acpc/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/jimmyrogue/acpc/main/install.sh | sh
 #
 # Environment:
 #   ACPC_VERSION       release to install, e.g. v0.2.0 (default: latest)
 #   ACPC_INSTALL_DIR   where to put the binary (default: ~/.local/bin)
 set -eu
 
-repo="AkaraChen/acpc"
+repo="jimmyrogue/acpc"
 install_dir="${ACPC_INSTALL_DIR:-$HOME/.local/bin}"
 
 say() { printf 'acpc-install: %s\n' "$*" >&2; }
