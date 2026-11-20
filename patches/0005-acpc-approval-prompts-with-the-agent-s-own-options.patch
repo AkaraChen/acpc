@@ -17,10 +17,10 @@ agent'. Codex's own app-server never offers AcpcOption.
  5 files changed, 59 insertions(+), 3 deletions(-)
 
 diff --git a/codex-rs/analytics/src/reducer.rs b/codex-rs/analytics/src/reducer.rs
-index e9a59ca..4e5f134 100644
+index d4d5bc9..af2b9fe 100644
 --- a/codex-rs/analytics/src/reducer.rs
 +++ b/codex-rs/analytics/src/reducer.rs
-@@ -3549,6 +3549,13 @@ fn command_execution_review_result(
+@@ -3572,6 +3572,13 @@ fn command_execution_review_result(
          },
          CommandExecutionApprovalDecision::Decline => (ReviewStatus::Denied, ReviewResolution::None),
          CommandExecutionApprovalDecision::Cancel => (ReviewStatus::Aborted, ReviewResolution::None),
@@ -48,7 +48,7 @@ index 8ad7c58..912b373 100644
  #[ts(export_to = "v2/")]
  pub struct AcpcPermissionOption {
 diff --git a/codex-rs/app-server-protocol/src/protocol/v2/item.rs b/codex-rs/app-server-protocol/src/protocol/v2/item.rs
-index c4cdf60..20d9691 100644
+index c4eef00..d6fa934 100644
 --- a/codex-rs/app-server-protocol/src/protocol/v2/item.rs
 +++ b/codex-rs/app-server-protocol/src/protocol/v2/item.rs
 @@ -86,6 +86,8 @@ pub enum CommandExecutionApprovalDecision {
@@ -61,10 +61,10 @@ index c4cdf60..20d9691 100644
  
  impl From<CoreReviewDecision> for CommandExecutionApprovalDecision {
 diff --git a/codex-rs/app-server/src/bespoke_event_handling.rs b/codex-rs/app-server/src/bespoke_event_handling.rs
-index 41e0b49..80d29af 100644
+index 5dfbfab..cfc8eb9 100644
 --- a/codex-rs/app-server/src/bespoke_event_handling.rs
 +++ b/codex-rs/app-server/src/bespoke_event_handling.rs
-@@ -2127,6 +2127,11 @@ async fn on_command_execution_request_approval_response(
+@@ -2138,6 +2138,11 @@ async fn on_command_execution_request_approval_response(
                          ReviewDecision::Abort,
                          Some(CommandExecutionStatus::Declined),
                      ),
@@ -77,10 +77,10 @@ index 41e0b49..80d29af 100644
                  Err(err) => {
                      error!("failed to deserialize CommandExecutionRequestApprovalResponse: {err}");
 diff --git a/codex-rs/tui/src/bottom_pane/approval_overlay.rs b/codex-rs/tui/src/bottom_pane/approval_overlay.rs
-index 46fd8ef..12bb539 100644
+index a0ba70a..7b49e75 100644
 --- a/codex-rs/tui/src/bottom_pane/approval_overlay.rs
 +++ b/codex-rs/tui/src/bottom_pane/approval_overlay.rs
-@@ -853,6 +853,22 @@ fn command_decision_to_review_decision(
+@@ -867,6 +867,22 @@ fn command_decision_to_review_decision(
          },
          CommandExecutionApprovalDecision::Decline => ReviewDecision::Denied,
          CommandExecutionApprovalDecision::Cancel => ReviewDecision::Abort,
@@ -103,7 +103,7 @@ index 46fd8ef..12bb539 100644
      }
  }
  
-@@ -862,9 +878,35 @@ fn exec_options(
+@@ -876,9 +892,35 @@ fn exec_options(
      additional_permissions: Option<&AdditionalPermissionProfile>,
      keymap: &ApprovalKeymap,
  ) -> Vec<ApprovalOption> {
@@ -139,7 +139,7 @@ index 46fd8ef..12bb539 100644
              CommandExecutionApprovalDecision::Accept => Some(ApprovalOption {
                  label: if network_approval_context.is_some() {
                      "Yes, just this once".to_string()
-@@ -936,7 +978,7 @@ fn exec_options(
+@@ -950,7 +992,7 @@ fn exec_options(
                  shortcuts: keymap.deny.clone(),
              }),
              CommandExecutionApprovalDecision::Cancel => Some(ApprovalOption {
@@ -148,7 +148,7 @@ index 46fd8ef..12bb539 100644
                  decision: ApprovalDecision::Command(CommandExecutionApprovalDecision::Cancel),
                  shortcuts: keymap.decline.clone(),
              }),
-@@ -1052,7 +1094,7 @@ fn patch_options(keymap: &ApprovalKeymap) -> Vec<ApprovalOption> {
+@@ -1066,7 +1108,7 @@ fn patch_options(keymap: &ApprovalKeymap) -> Vec<ApprovalOption> {
              shortcuts: keymap.approve_for_session.clone(),
          },
          ApprovalOption {

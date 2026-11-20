@@ -495,6 +495,7 @@ pub(crate) fn on_elicitation(
         thread_id: thread_id.clone(),
         turn_id: turn_id.clone(),
         server_name,
+        environment_id: None,
         request: elicitation,
     };
     let key = AgentRequestKey::new(agent, &connection, id);

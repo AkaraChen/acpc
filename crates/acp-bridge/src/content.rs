@@ -74,7 +74,11 @@ fn inline_image_block(image: &ImageReference, caps: &AgentCaps) -> acp::ContentB
     if !caps.prompt_image() {
         return note("[image omitted: this agent does not accept images]");
     }
-    match codex_utils_image::load_data_url_for_prompt(url, PROMPT_IMAGE_MODE) {
+    match codex_utils_image::load_data_url_for_prompt(
+        url,
+        PROMPT_IMAGE_MODE,
+        codex_utils_image::PromptImageDecoder::default(),
+    ) {
         Ok(encoded) => acp::ContentBlock::Image(image_content(&encoded)),
         Err(err) => {
             tracing::warn!("replacing unreadable pasted image with a note: {err}");

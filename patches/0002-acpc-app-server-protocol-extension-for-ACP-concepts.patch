@@ -36,10 +36,10 @@ and exec reject the new methods.
  create mode 100644 codex-rs/tui/src/chatwidget/acpc.rs
 
 diff --git a/codex-rs/app-server-protocol/src/protocol/common.rs b/codex-rs/app-server-protocol/src/protocol/common.rs
-index d61e1b3..6ee1b54 100644
+index 3a025c8..4be3f79 100644
 --- a/codex-rs/app-server-protocol/src/protocol/common.rs
 +++ b/codex-rs/app-server-protocol/src/protocol/common.rs
-@@ -1615,6 +1615,32 @@ client_request_definitions! {
+@@ -1662,6 +1662,32 @@ client_request_definitions! {
          serialization: fuzzy_session_id(params.session_id),
          response: FuzzyFileSearchSessionStopResponse,
      },
@@ -72,8 +72,8 @@ index d61e1b3..6ee1b54 100644
  }
  
  /// Generates an `enum ServerRequest` where each variant is a request that the
-@@ -1943,6 +1969,21 @@ server_request_definitions! {
-         response: v2::CurrentTimeReadResponse,
+@@ -1983,6 +2009,21 @@ server_request_definitions! {
+         response: v2::AttestationGenerateResponse,
      },
  
 +    #[experimental("acpc/auth/select")]
@@ -94,7 +94,7 @@ index d61e1b3..6ee1b54 100644
      /// DEPRECATED APIs below
      /// Request to approve a patch.
      /// This request is used for Turns started via the legacy APIs (i.e. SendUserTurn, SendUserMessage).
-@@ -2164,6 +2205,16 @@ server_notification_definitions! {
+@@ -2206,6 +2247,16 @@ server_notification_definitions! {
      WindowsWorldWritableWarning => "windows/worldWritableWarning" (v2::WindowsWorldWritableWarningNotification),
      WindowsSandboxSetupCompleted => "windowsSandbox/setupCompleted" (v2::WindowsSandboxSetupCompletedNotification),
  
@@ -381,7 +381,7 @@ index 0000000..8ad7c58
 +    pub exit_code: Option<i32>,
 +}
 diff --git a/codex-rs/app-server-protocol/src/protocol/v2/mod.rs b/codex-rs/app-server-protocol/src/protocol/v2/mod.rs
-index 96bb11c..7a33b98 100644
+index d9fd755..37def07 100644
 --- a/codex-rs/app-server-protocol/src/protocol/v2/mod.rs
 +++ b/codex-rs/app-server-protocol/src/protocol/v2/mod.rs
 @@ -1,6 +1,7 @@
@@ -401,10 +401,10 @@ index 96bb11c..7a33b98 100644
  pub use apps::*;
  pub use attestation::*;
 diff --git a/codex-rs/app-server/src/message_processor.rs b/codex-rs/app-server/src/message_processor.rs
-index 309d579..0101982 100644
+index 503c413..c804b38 100644
 --- a/codex-rs/app-server/src/message_processor.rs
 +++ b/codex-rs/app-server/src/message_processor.rs
-@@ -1990,6 +1990,13 @@ impl MessageProcessor {
+@@ -2101,6 +2101,13 @@ impl MessageProcessor {
                  .fuzzy_file_search_session_stop(params)
                  .await
                  .map(|response| Some(response.into())),
@@ -419,13 +419,13 @@ index 309d579..0101982 100644
                  self.command_exec_processor
                      .one_off_command_exec(&request_id, params)
 diff --git a/codex-rs/app-server/src/notification_media.rs b/codex-rs/app-server/src/notification_media.rs
-index 1e3d3d9..0627767 100644
+index 85f5b75..b759128 100644
 --- a/codex-rs/app-server/src/notification_media.rs
 +++ b/codex-rs/app-server/src/notification_media.rs
-@@ -139,7 +139,11 @@ pub(crate) fn without_notification_media(notification: ServerNotification) -> Se
-         | ServerNotification::WindowsWorldWritableWarning(_)
+@@ -140,7 +140,11 @@ pub(crate) fn without_notification_media(notification: ServerNotification) -> Se
          | ServerNotification::WindowsSandboxSetupCompleted(_)
          | ServerNotification::AccountLoginCompleted(_)
+         | ServerNotification::ThreadSearchPartial(_)
 -        | ServerNotification::GatewayOAuthChanged(_) => notification,
 +        | ServerNotification::GatewayOAuthChanged(_)
 +        | ServerNotification::AcpcAvailableCommandsUpdated(_)
@@ -436,10 +436,10 @@ index 1e3d3d9..0627767 100644
  }
  
 diff --git a/codex-rs/exec/src/lib.rs b/codex-rs/exec/src/lib.rs
-index 827eb2b..f435969 100644
+index 2907eb5..cc2ac0c 100644
 --- a/codex-rs/exec/src/lib.rs
 +++ b/codex-rs/exec/src/lib.rs
-@@ -2322,6 +2322,16 @@ async fn handle_server_request(
+@@ -2469,6 +2469,16 @@ async fn handle_server_request(
              )
              .await
          }
@@ -509,7 +509,7 @@ index 0000000..a31eee4
 +    pub(crate) modes: Option<codex_app_server_protocol::AcpcSessionModes>,
 +}
 diff --git a/codex-rs/tui/src/app/app_server_event_targets.rs b/codex-rs/tui/src/app/app_server_event_targets.rs
-index 8e7b3f7..c329eb2 100644
+index 34e923a..1818e57 100644
 --- a/codex-rs/tui/src/app/app_server_event_targets.rs
 +++ b/codex-rs/tui/src/app/app_server_event_targets.rs
 @@ -6,6 +6,8 @@ use codex_protocol::ThreadId;
@@ -521,7 +521,7 @@ index 8e7b3f7..c329eb2 100644
          ServerRequest::CommandExecutionRequestApproval { params, .. } => {
              ThreadId::from_string(&params.thread_id).ok()
          }
-@@ -46,6 +48,17 @@ pub(super) fn server_notification_thread_target(
+@@ -43,6 +45,17 @@ pub(super) fn server_notification_thread_target(
      notification: &ServerNotification,
  ) -> ServerNotificationThreadTarget {
      let thread_id = match notification {
@@ -540,7 +540,7 @@ index 8e7b3f7..c329eb2 100644
          ServerNotification::ThreadStarted(notification) => Some(notification.thread.id.as_str()),
          ServerNotification::ThreadStatusChanged(notification) => {
 diff --git a/codex-rs/tui/src/app/app_server_requests.rs b/codex-rs/tui/src/app/app_server_requests.rs
-index be5c776..c9c58bd 100644
+index 0ee0dd2..6513921 100644
 --- a/codex-rs/tui/src/app/app_server_requests.rs
 +++ b/codex-rs/tui/src/app/app_server_requests.rs
 @@ -125,6 +125,15 @@ impl PendingAppServerRequests {
@@ -559,7 +559,7 @@ index be5c776..c9c58bd 100644
              ServerRequest::CommandExecutionRequestApproval { request_id, params } => {
                  let approval_id = params
                      .approval_id
-@@ -485,6 +494,7 @@ impl PendingAppServerRequests {
+@@ -479,6 +488,7 @@ impl PendingAppServerRequests {
  
      fn pending_request(&self, request: &ServerRequest) -> Option<&PendingServerRequest> {
          match request {
@@ -568,7 +568,7 @@ index be5c776..c9c58bd 100644
                  let approval_id = params.approval_id.as_ref().unwrap_or(&params.item_id);
                  self.exec_approvals
 diff --git a/codex-rs/tui/src/app/side.rs b/codex-rs/tui/src/app/side.rs
-index 755d736..84266ab 100644
+index 3e20f83..d202bc6 100644
 --- a/codex-rs/tui/src/app/side.rs
 +++ b/codex-rs/tui/src/app/side.rs
 @@ -58,6 +58,7 @@ impl SideParentStatus {
@@ -580,10 +580,10 @@ index 755d736..84266ab 100644
              ServerRequest::CommandExecutionRequestApproval { .. }
              | ServerRequest::FileChangeRequestApproval { .. }
 diff --git a/codex-rs/tui/src/chatwidget.rs b/codex-rs/tui/src/chatwidget.rs
-index 31d1dc1..397c48c 100644
+index bbc8ca1..b05caa2 100644
 --- a/codex-rs/tui/src/chatwidget.rs
 +++ b/codex-rs/tui/src/chatwidget.rs
-@@ -254,6 +254,7 @@ use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
+@@ -253,6 +253,7 @@ use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
  use crate::status_indicator_widget::StatusDetailsCapitalization;
  use crate::text_formatting::truncate_text;
  use crate::tui::FrameRequester;
@@ -591,7 +591,7 @@ index 31d1dc1..397c48c 100644
  mod activity_groups;
  mod activity_presentation;
  mod command_lifecycle;
-@@ -808,6 +809,7 @@ pub(crate) struct ChatWidget {
+@@ -821,6 +822,7 @@ pub(crate) struct ChatWidget {
      last_rendered_user_message_display: Option<UserMessageDisplay>,
      last_rendered_user_message_client_id: Option<String>,
      last_non_retry_error: Option<(String, String)>,
@@ -599,7 +599,7 @@ index 31d1dc1..397c48c 100644
      // Keep fixture storage alive until all other widget fields have been dropped.
      #[cfg(test)]
      pub(crate) test_codex_home: Option<tempfile::TempDir>,
-@@ -2139,6 +2141,8 @@ impl Drop for ChatWidget {
+@@ -2144,6 +2146,8 @@ impl Drop for ChatWidget {
  }
  
  const PLACEHOLDER: &str = "Ask Codex to do anything";
@@ -658,7 +658,7 @@ index 0000000..4952543
 +    }
 +}
 diff --git a/codex-rs/tui/src/chatwidget/constructor.rs b/codex-rs/tui/src/chatwidget/constructor.rs
-index 9d1d4fa..bcbe321 100644
+index 1e4a4cd..bdfaa60 100644
 --- a/codex-rs/tui/src/chatwidget/constructor.rs
 +++ b/codex-rs/tui/src/chatwidget/constructor.rs
 @@ -41,7 +41,12 @@ impl ChatWidget {
@@ -675,7 +675,7 @@ index 9d1d4fa..bcbe321 100644
          let side_placeholder = SIDE_PLACEHOLDER.to_string();
  
          let model_override = model.as_deref();
-@@ -306,6 +311,7 @@ impl ChatWidget {
+@@ -322,6 +327,7 @@ impl ChatWidget {
              last_rendered_user_message_display: None,
              last_rendered_user_message_client_id: None,
              last_non_retry_error: None,
@@ -684,10 +684,10 @@ index 9d1d4fa..bcbe321 100644
              test_codex_home: None,
          };
 diff --git a/codex-rs/tui/src/chatwidget/protocol.rs b/codex-rs/tui/src/chatwidget/protocol.rs
-index 4f1746e..6517a1d 100644
+index 937c51d..8670797 100644
 --- a/codex-rs/tui/src/chatwidget/protocol.rs
 +++ b/codex-rs/tui/src/chatwidget/protocol.rs
-@@ -44,6 +44,12 @@ impl ChatWidget {
+@@ -59,6 +59,12 @@ impl ChatWidget {
              self.restore_retry_status_header_if_present();
          }
          match notification {
@@ -701,7 +701,7 @@ index 4f1746e..6517a1d 100644
                  if notification.success {
                      self.add_info_message(
 diff --git a/codex-rs/tui/src/chatwidget/protocol_requests.rs b/codex-rs/tui/src/chatwidget/protocol_requests.rs
-index e76b50b..94d8dd1 100644
+index bae49e8..ac69943 100644
 --- a/codex-rs/tui/src/chatwidget/protocol_requests.rs
 +++ b/codex-rs/tui/src/chatwidget/protocol_requests.rs
 @@ -17,6 +17,8 @@ impl ChatWidget {
@@ -714,7 +714,7 @@ index e76b50b..94d8dd1 100644
                  let fallback_cwd = self.config.cwd.clone();
                  self.on_exec_approval_request(
 diff --git a/codex-rs/tui/src/history_cell/session.rs b/codex-rs/tui/src/history_cell/session.rs
-index 120454d..14de835 100644
+index ac64947..6b7f39a 100644
 --- a/codex-rs/tui/src/history_cell/session.rs
 +++ b/codex-rs/tui/src/history_cell/session.rs
 @@ -42,6 +42,10 @@ pub(crate) fn with_border_with_inner_width(
@@ -742,10 +742,10 @@ index 120454d..14de835 100644
                  "model: {}{}",
                  self.model,
 diff --git a/codex-rs/tui/src/lib.rs b/codex-rs/tui/src/lib.rs
-index 115f083..5dd2826 100644
+index cb2bcc8..0b908f4 100644
 --- a/codex-rs/tui/src/lib.rs
 +++ b/codex-rs/tui/src/lib.rs
-@@ -104,6 +104,7 @@ pub(crate) use codex_app_server_client::legacy_core;
+@@ -105,6 +105,7 @@ pub(crate) use codex_app_server_client::legacy_core;
  
  pub(crate) use worktree_startup::ManagedTuiWorktree;
  
@@ -754,10 +754,10 @@ index 115f083..5dd2826 100644
  mod additional_dirs;
  mod analytics;
 diff --git a/codex-rs/tui/src/startup_draft.rs b/codex-rs/tui/src/startup_draft.rs
-index 09ea015..67e84fd 100644
+index 49244cc..25fbaf7 100644
 --- a/codex-rs/tui/src/startup_draft.rs
 +++ b/codex-rs/tui/src/startup_draft.rs
-@@ -518,7 +518,12 @@ fn startup_draft_bottom_pane(
+@@ -626,7 +626,12 @@ fn startup_draft_bottom_pane(
              frame_requester,
              has_input_focus: true,
              enhanced_keys_supported,

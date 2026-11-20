@@ -15,7 +15,7 @@ with min/max item checks.
  create mode 100644 codex-rs/tui/src/bottom_pane/mcp_server_elicitation/extra_fields.rs
 
 diff --git a/codex-rs/tui/src/bottom_pane/mcp_server_elicitation.rs b/codex-rs/tui/src/bottom_pane/mcp_server_elicitation.rs
-index 3239844..f1fa5fd 100644
+index eb18d98..7b1c24b 100644
 --- a/codex-rs/tui/src/bottom_pane/mcp_server_elicitation.rs
 +++ b/codex-rs/tui/src/bottom_pane/mcp_server_elicitation.rs
 @@ -123,8 +123,23 @@ enum McpServerElicitationFieldInput {
@@ -42,7 +42,7 @@ index 3239844..f1fa5fd 100644
  #[derive(Clone, Debug, PartialEq)]
  struct McpServerElicitationField {
      id: String,
-@@ -187,6 +202,8 @@ struct McpServerElicitationAnswerState {
+@@ -188,6 +203,8 @@ struct McpServerElicitationAnswerState {
      selection: ScrollState,
      draft: ComposerDraft,
      answer_committed: bool,
@@ -51,7 +51,7 @@ index 3239844..f1fa5fd 100644
  }
  
  impl McpServerElicitationFormRequest {
-@@ -620,8 +637,12 @@ fn parse_field(
+@@ -606,8 +623,12 @@ fn parse_field(
          McpElicitationPrimitiveSchema::Enum(McpElicitationEnumSchema::SingleSelect(schema)) => {
              parse_single_select_field(id, schema, required)
          }
@@ -66,7 +66,7 @@ index 3239844..f1fa5fd 100644
      }
  }
  
-@@ -765,19 +786,33 @@ impl McpServerElicitationOverlay {
+@@ -751,19 +772,33 @@ impl McpServerElicitationOverlay {
              .iter()
              .map(|field| {
                  let mut selection = ScrollState::new();
@@ -101,7 +101,7 @@ index 3239844..f1fa5fd 100644
                  }
              })
              .collect();
-@@ -879,7 +914,17 @@ impl McpServerElicitationOverlay {
+@@ -865,7 +900,17 @@ impl McpServerElicitationOverlay {
      fn current_field_is_select(&self) -> bool {
          matches!(
              self.current_field().map(|field| &field.input),
@@ -120,7 +120,7 @@ index 3239844..f1fa5fd 100644
          )
      }
  
-@@ -901,7 +946,10 @@ impl McpServerElicitationOverlay {
+@@ -887,7 +932,10 @@ impl McpServerElicitationOverlay {
  
      fn current_options(&self) -> &[McpServerElicitationOption] {
          match self.current_field().map(|field| &field.input) {
@@ -132,7 +132,7 @@ index 3239844..f1fa5fd 100644
              _ => &[],
          }
      }
-@@ -918,7 +966,15 @@ impl McpServerElicitationOverlay {
+@@ -904,7 +952,15 @@ impl McpServerElicitationOverlay {
                      ' '
                  };
                  let number = idx + 1;
@@ -149,7 +149,7 @@ index 3239844..f1fa5fd 100644
                  let wrap_indent = UnicodeWidthStr::width(prefix_label.as_str());
                  GenericDisplayRow {
                      selection_style: Some(crate::bottom_pane::selection_style()),
-@@ -1094,9 +1150,67 @@ impl McpServerElicitationOverlay {
+@@ -1087,9 +1143,67 @@ impl McpServerElicitationOverlay {
                  let text = text.trim();
                  (!text.is_empty()).then(|| Value::String(text.to_string()))
              }
@@ -217,7 +217,7 @@ index 3239844..f1fa5fd 100644
      fn required_unanswered_count(&self) -> usize {
          self.request
              .fields
-@@ -1170,6 +1284,11 @@ impl McpServerElicitationOverlay {
+@@ -1163,6 +1277,11 @@ impl McpServerElicitationOverlay {
  
      fn submit_answers(&mut self) {
          self.save_current_draft();
@@ -229,7 +229,7 @@ index 3239844..f1fa5fd 100644
          if let Some(idx) = self.first_required_unanswered_index() {
              self.validation_error = Some("Answer required fields before submitting.".to_string());
              self.jump_to_field(idx);
-@@ -1605,6 +1724,52 @@ impl BottomPaneView for McpServerElicitationOverlay {
+@@ -1598,6 +1717,52 @@ impl BottomPaneView for McpServerElicitationOverlay {
              _ => {}
          }
  
@@ -282,7 +282,7 @@ index 3239844..f1fa5fd 100644
          if self.current_field_is_select() {
              self.validation_error = None;
              let options_len = self.options_len();
-@@ -1908,7 +2073,7 @@ mod tests {
+@@ -1903,7 +2068,7 @@ mod tests {
      }
  
      #[test]
@@ -291,7 +291,7 @@ index 3239844..f1fa5fd 100644
          let request = from_form_request(
              ThreadId::default(),
              form_request(
-@@ -1924,9 +2089,17 @@ mod tests {
+@@ -1919,9 +2084,17 @@ mod tests {
                  }),
                  /*meta*/ None,
              ),

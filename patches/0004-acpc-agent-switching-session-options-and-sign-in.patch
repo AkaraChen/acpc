@@ -161,7 +161,7 @@ index f919f8d..03391c8 100644
 +    }
 +}
 diff --git a/codex-rs/tui/src/app.rs b/codex-rs/tui/src/app.rs
-index 84a42c3..d9b88ce 100644
+index 766afaa..e50e857 100644
 --- a/codex-rs/tui/src/app.rs
 +++ b/codex-rs/tui/src/app.rs
 @@ -198,6 +198,7 @@ use tokio_util::sync::CancellationToken;
@@ -463,10 +463,10 @@ index 0000000..cf922a2
 +    }
 +}
 diff --git a/codex-rs/tui/src/app/app_server_events.rs b/codex-rs/tui/src/app/app_server_events.rs
-index 493628a..3bc7ed3 100644
+index 283753d..396125e 100644
 --- a/codex-rs/tui/src/app/app_server_events.rs
 +++ b/codex-rs/tui/src/app/app_server_events.rs
-@@ -622,6 +622,9 @@ impl App {
+@@ -665,6 +665,9 @@ impl App {
          app_server_client: &AppServerSession,
          buffered_request: BufferedServerRequest,
      ) {
@@ -475,13 +475,13 @@ index 493628a..3bc7ed3 100644
 +        }
          let request = &buffered_request.request;
          let thread_id = server_request_thread_id(request);
-         if thread_id
+         if let Some((kind, _)) =
 diff --git a/codex-rs/tui/src/app/event_dispatch.rs b/codex-rs/tui/src/app/event_dispatch.rs
-index 3881aac..b3687df 100644
+index dc4d5d8..fed10b3 100644
 --- a/codex-rs/tui/src/app/event_dispatch.rs
 +++ b/codex-rs/tui/src/app/event_dispatch.rs
-@@ -633,6 +633,9 @@ impl App {
-             AppEvent::ResumeBackendSession(_) | AppEvent::CycleNewConversationBackend => {
+@@ -725,6 +725,9 @@ impl App {
+             | AppEvent::StartCloudConversation { .. } => {
                  unreachable!("backend selection is handled by the session manager")
              }
 +            AppEvent::Acpc(event) => {
@@ -491,10 +491,10 @@ index 3881aac..b3687df 100644
                  return self.archive_current_thread(tui, app_server).await;
              }
 diff --git a/codex-rs/tui/src/app/tests/startup.rs b/codex-rs/tui/src/app/tests/startup.rs
-index 04d2c4e..dd9ff90 100644
+index 59a6920..da43599 100644
 --- a/codex-rs/tui/src/app/tests/startup.rs
 +++ b/codex-rs/tui/src/app/tests/startup.rs
-@@ -1865,6 +1865,33 @@ async fn ignore_same_thread_resume_reports_noop_for_current_thread() {
+@@ -1889,6 +1889,33 @@ async fn ignore_same_thread_resume_reports_noop_for_current_thread() {
      )));
  }
  
@@ -529,10 +529,10 @@ index 04d2c4e..dd9ff90 100644
  async fn ignore_same_thread_resume_allows_reattaching_displayed_inactive_thread() {
      let mut app = make_test_app().await;
 diff --git a/codex-rs/tui/src/app/thread_routing.rs b/codex-rs/tui/src/app/thread_routing.rs
-index ccd5d3f..3bc1196 100644
+index a0320d7..f8e345d 100644
 --- a/codex-rs/tui/src/app/thread_routing.rs
 +++ b/codex-rs/tui/src/app/thread_routing.rs
-@@ -262,7 +262,10 @@ impl App {
+@@ -284,7 +284,10 @@ impl App {
          &mut self,
          target_session: &crate::resume_picker::SessionTarget,
      ) -> bool {
@@ -541,27 +541,27 @@ index ccd5d3f..3bc1196 100644
 +        // only thread/resume reopens its session.
 +        if crate::acpc::enabled()
 +            || self.chat_widget.has_provider_error()
+             || self.chat_widget.thread_stream_disconnected
              || self.active_thread_id != Some(target_session.thread_id)
              || self
-                 .thread_event_channels
 diff --git a/codex-rs/tui/src/app_event.rs b/codex-rs/tui/src/app_event.rs
-index 07f509d..f0a625a 100644
+index d26a373..994da4c 100644
 --- a/codex-rs/tui/src/app_event.rs
 +++ b/codex-rs/tui/src/app_event.rs
-@@ -346,6 +346,8 @@ impl CapturedSideWork {
- #[allow(clippy::large_enum_variant)]
+@@ -355,6 +355,8 @@ impl CapturedSideWork {
  #[derive(Debug, IntoStaticStr)]
  pub(crate) enum AppEvent {
+     StatuslineRead(crate::chatwidget::StatuslineReadEvent),
 +    /// acpc: ACP agent, session option and sign-in actions (`app/acpc.rs`).
 +    Acpc(crate::acpc::AcpcAppEvent),
      AccountEmailLoaded {
          request_id: uuid::Uuid,
          email: Option<String>,
 diff --git a/codex-rs/tui/src/bottom_pane/mod.rs b/codex-rs/tui/src/bottom_pane/mod.rs
-index b45180c..06acf96 100644
+index 8d4917f..21b504a 100644
 --- a/codex-rs/tui/src/bottom_pane/mod.rs
 +++ b/codex-rs/tui/src/bottom_pane/mod.rs
-@@ -314,6 +314,8 @@ pub(crate) struct BottomPane {
+@@ -317,6 +317,8 @@ pub(crate) struct BottomPane {
      pub(crate) questions: Option<Box<AsyncQuestions>>,
      delayed_approval_requests: VecDeque<DelayedApprovalRequest>,
      last_composer_activity_at: Option<Instant>,
@@ -570,7 +570,7 @@ index b45180c..06acf96 100644
  
      app_event_tx: AppEventSender,
      frame_requester: FrameRequester,
-@@ -415,6 +417,7 @@ impl BottomPane {
+@@ -418,6 +420,7 @@ impl BottomPane {
              questions: None,
              delayed_approval_requests: VecDeque::new(),
              last_composer_activity_at: None,
@@ -578,7 +578,7 @@ index b45180c..06acf96 100644
              app_event_tx,
              frame_requester,
              thread_id: None,
-@@ -1120,7 +1123,7 @@ impl BottomPane {
+@@ -1129,7 +1132,7 @@ impl BottomPane {
              if needs_redraw || view_complete {
                  self.request_redraw();
              }
@@ -587,7 +587,7 @@ index b45180c..06acf96 100644
              let needs_redraw = self.composer.handle_paste(pasted);
              if has_pasted_text {
                  self.record_composer_activity_at(Instant::now());
-@@ -1233,6 +1236,19 @@ impl BottomPane {
+@@ -1250,6 +1253,19 @@ impl BottomPane {
          self.request_redraw();
      }
  
@@ -607,7 +607,7 @@ index b45180c..06acf96 100644
      pub(crate) fn show_shutdown_in_progress(&mut self) {
          self.view_stack.clear();
          self.warnings_view = None;
-@@ -1948,7 +1964,9 @@ impl BottomPane {
+@@ -1977,7 +1993,9 @@ impl BottomPane {
  
      /// Return true when no popups or modal views are active, regardless of task state.
      pub(crate) fn can_launch_external_editor(&self) -> bool {
@@ -618,7 +618,7 @@ index b45180c..06acf96 100644
      }
  
      /// A hidden completion popup can yield to another pane. Prompts and queries keep input.
-@@ -2296,7 +2314,7 @@ impl BottomPane {
+@@ -2330,7 +2348,7 @@ impl BottomPane {
  
      fn on_active_view_complete(&mut self) {
          self.resume_status_timer_after_modal();
@@ -627,7 +627,7 @@ index b45180c..06acf96 100644
      }
  
      fn pause_status_timer_for_modal(&mut self) {
-@@ -4386,4 +4404,61 @@ mod tests {
+@@ -4448,4 +4466,61 @@ mod tests {
          assert!(pane.cursor_pos(area).is_some());
          assert_eq!(lower_view_handle_calls.get(), 0);
      }
@@ -1037,10 +1037,10 @@ index 7cf491b..ad7fe20 100644
 +    }
  }
 diff --git a/codex-rs/tui/src/chatwidget/interaction.rs b/codex-rs/tui/src/chatwidget/interaction.rs
-index 6876532..2d65dbe 100644
+index fa88da2..1da5b9d 100644
 --- a/codex-rs/tui/src/chatwidget/interaction.rs
 +++ b/codex-rs/tui/src/chatwidget/interaction.rs
-@@ -325,6 +325,14 @@ impl ChatWidget {
+@@ -350,6 +350,14 @@ impl ChatWidget {
          }
  
          match key_event {
@@ -1056,10 +1056,10 @@ index 6876532..2d65dbe 100644
                  code: KeyCode::BackTab,
                  kind: KeyEventKind::Press,
 diff --git a/codex-rs/tui/src/chatwidget/slash_dispatch.rs b/codex-rs/tui/src/chatwidget/slash_dispatch.rs
-index 479f167..2416e3c 100644
+index 57e630b..dbadbaa 100644
 --- a/codex-rs/tui/src/chatwidget/slash_dispatch.rs
 +++ b/codex-rs/tui/src/chatwidget/slash_dispatch.rs
-@@ -633,6 +633,8 @@ impl ChatWidget {
+@@ -629,6 +629,8 @@ impl ChatWidget {
                      );
                  }
              }
@@ -1068,7 +1068,7 @@ index 479f167..2416e3c 100644
              SlashCommand::TestApproval => {
                  use std::collections::HashMap;
  
-@@ -1336,7 +1338,9 @@ impl ChatWidget {
+@@ -1365,7 +1367,9 @@ impl ChatWidget {
              | SlashCommand::Rename
              | SlashCommand::Voice
              | SlashCommand::Recap
@@ -1079,10 +1079,10 @@ index 479f167..2416e3c 100644
                  Some(thread_id) if self.can_change_working_directory(thread_id) => QueueDrain::Stop,
                  _ => QueueDrain::Continue,
 diff --git a/codex-rs/tui/src/lib.rs b/codex-rs/tui/src/lib.rs
-index 5dd2826..a8679be 100644
+index 0b908f4..fda7c08 100644
 --- a/codex-rs/tui/src/lib.rs
 +++ b/codex-rs/tui/src/lib.rs
-@@ -855,6 +855,10 @@ async fn lookup_session_target_with_app_server(
+@@ -779,6 +779,10 @@ async fn lookup_session_target_with_app_server(
                      %err,
                      "thread/read failed during TUI session lookup"
                  );
@@ -1093,7 +1093,7 @@ index 5dd2826..a8679be 100644
                  Ok(None)
              }
          };
-@@ -1610,6 +1614,7 @@ async fn run_ratatui_app(
+@@ -1540,6 +1544,7 @@ async fn run_ratatui_app(
      let missing_session_exit =
          |id_str: &str,
           action: &str,
@@ -1101,8 +1101,8 @@ index 5dd2826..a8679be 100644
           tui: &mut Tui,
           terminal_restore_guard: &mut TerminalRestoreGuard| {
              error!("Error finding conversation path: {id_str}");
-@@ -1622,9 +1627,13 @@ async fn run_ratatui_app(
-                 resume_hint: None,
+@@ -1553,9 +1558,13 @@ async fn run_ratatui_app(
+                 archive_warnings: Vec::new(),
                  disconnect_info: None,
                  update_action: None,
 -                exit_reason: ExitReason::Fatal(format!(
@@ -1118,7 +1118,7 @@ index 5dd2826..a8679be 100644
              })
          };
  
-@@ -1672,6 +1681,7 @@ async fn run_ratatui_app(
+@@ -1603,6 +1612,7 @@ async fn run_ratatui_app(
                      return missing_session_exit(
                          id_str,
                          "fork",
@@ -1126,7 +1126,7 @@ index 5dd2826..a8679be 100644
                          &mut tui,
                          &mut terminal_restore_guard,
                      );
-@@ -1763,6 +1773,16 @@ async fn run_ratatui_app(
+@@ -1695,6 +1705,16 @@ async fn run_ratatui_app(
              )
              .await;
          let target_session = match lookup {
@@ -1143,7 +1143,7 @@ index 5dd2826..a8679be 100644
              Ok(result) => result?,
              Err(err) => {
                  shutdown_startup_session(app_server.take(), &mut terminal_restore_guard).await;
-@@ -1776,6 +1796,7 @@ async fn run_ratatui_app(
+@@ -1708,6 +1728,7 @@ async fn run_ratatui_app(
                  return missing_session_exit(
                      id_str,
                      "resume",
@@ -1151,7 +1151,7 @@ index 5dd2826..a8679be 100644
                      &mut tui,
                      &mut terminal_restore_guard,
                  );
-@@ -2036,10 +2057,12 @@ async fn run_ratatui_app(
+@@ -1970,10 +1991,12 @@ async fn run_ratatui_app(
      }
  
      // The shared overview does not open a workspace; session selection checks trust when needed.
@@ -1165,10 +1165,10 @@ index 5dd2826..a8679be 100644
          let resumed_thread = if matches!(app_server_target, AppServerTarget::LocalDaemon { .. })
              && let resume_picker::SessionSelection::Resume(target) = &session_selection
 diff --git a/codex-rs/tui/src/resume_picker.rs b/codex-rs/tui/src/resume_picker.rs
-index d2d45d3..84a7fe9 100644
+index 9eb8c04..1187754 100644
 --- a/codex-rs/tui/src/resume_picker.rs
 +++ b/codex-rs/tui/src/resume_picker.rs
-@@ -2496,15 +2496,22 @@ fn row_from_app_server_thread(thread: Thread) -> Option<Row> {
+@@ -2610,15 +2610,22 @@ fn row_from_app_server_thread(thread: Thread) -> Option<Row> {
          },
          thread_id: Some(thread_id),
          thread_name: thread.name,
@@ -1195,7 +1195,7 @@ index d2d45d3..84a7fe9 100644
  fn thread_list_params(
      cursor: Option<String>,
      cwd_filter: Option<ThreadListCwdFilter>,
-@@ -4668,6 +4675,14 @@ mod tests {
+@@ -4817,6 +4824,14 @@ mod tests {
          assert!(row.matches_query(&thread_id.to_string()[..8]));
      }
  
@@ -1211,10 +1211,10 @@ index d2d45d3..84a7fe9 100644
      fn relative_time_formats_zero_seconds_as_now() {
          let reference = DateTime::parse_from_rfc3339("2026-05-02T12:00:00Z")
 diff --git a/codex-rs/tui/src/slash_command.rs b/codex-rs/tui/src/slash_command.rs
-index 18f8ae6..342c30d 100644
+index f5df1f5..86a348a 100644
 --- a/codex-rs/tui/src/slash_command.rs
 +++ b/codex-rs/tui/src/slash_command.rs
-@@ -86,6 +86,9 @@ pub enum SlashCommand {
+@@ -88,6 +88,9 @@ pub enum SlashCommand {
      MemoryDrop,
      #[strum(serialize = "debug-m-update")]
      MemoryUpdate,
@@ -1224,7 +1224,7 @@ index 18f8ae6..342c30d 100644
  }
  
  impl SlashCommand {
-@@ -157,6 +160,8 @@ impl SlashCommand {
+@@ -162,6 +165,8 @@ impl SlashCommand {
              SlashCommand::Logout => "log out of Codex",
              SlashCommand::Rollout => "print the rollout file path",
              SlashCommand::TestApproval => "test approval request",
@@ -1233,7 +1233,7 @@ index 18f8ae6..342c30d 100644
          }
      }
  
-@@ -228,6 +233,7 @@ impl SlashCommand {
+@@ -235,6 +240,7 @@ impl SlashCommand {
          matches!(
              self,
              SlashCommand::New
@@ -1241,7 +1241,7 @@ index 18f8ae6..342c30d 100644
                  | SlashCommand::Clear
                  | SlashCommand::Resume
                  | SlashCommand::Agents
-@@ -309,6 +315,8 @@ impl SlashCommand {
+@@ -318,6 +324,8 @@ impl SlashCommand {
              SlashCommand::TestApproval => true,
              SlashCommand::Agents | SlashCommand::MultiAgents => true,
              SlashCommand::Config | SlashCommand::Theme | SlashCommand::Pets => false,
@@ -1250,7 +1250,7 @@ index 18f8ae6..342c30d 100644
          }
      }
  
-@@ -317,6 +325,7 @@ impl SlashCommand {
+@@ -326,6 +334,7 @@ impl SlashCommand {
              return false;
          }
          match self {
