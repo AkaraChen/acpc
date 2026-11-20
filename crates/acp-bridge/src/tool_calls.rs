@@ -123,7 +123,9 @@ pub(crate) fn output_text(call: &acp::ToolCall) -> String {
         .content
         .iter()
         .filter_map(|content| match content {
-            acp::ToolCallContent::Content(content) => Some(display_text(&content.content)),
+            acp::ToolCallContent::Content(content) => {
+                Some(unfence(&display_text(&content.content)))
+            }
             _ => None,
         })
         .filter(|text| !text.is_empty())
@@ -145,6 +147,28 @@ pub(crate) fn output_text(call: &acp::ToolCall) -> String {
         }
     }
     parts.join("\n")
+}
+
+/// Some agents (claude-agent-acp) wrap terminal output in a Markdown code
+/// fence for Markdown renderers. The TUI shows command output verbatim, so the
+/// fence lines would appear as literal backticks.
+fn unfence(text: &str) -> String {
+    let Some(rest) = text.strip_prefix("```") else {
+        return text.to_string();
+    };
+    // The opening fence line may carry an info string (```console).
+    let Some((info, body)) = rest.split_once('\n') else {
+        return text.to_string();
+    };
+    if info.contains('`') {
+        return text.to_string();
+    }
+    let body = body.strip_suffix('\n').unwrap_or(body);
+    let body = body
+        .strip_suffix("\n```")
+        .or_else(|| body.strip_suffix("```"))
+        .unwrap_or(body);
+    body.to_string()
 }
 
 fn command_line(call: &acp::ToolCall) -> String {
@@ -696,6 +720,14 @@ mod tests {
         let changes = file_changes(&edit(vec![acp::ToolCallContent::Diff(block)]));
         assert_eq!(changes[0].kind, PatchChangeKind::Update { move_path: None });
         assert_eq!(changes[0].diff, "@@ -2 +2 @@\n-b\n+B\n");
+    }
+
+    #[test]
+    fn fenced_terminal_output_loses_its_fence() {
+        assert_eq!(unfence("```\na\nb\n```"), "a\nb");
+        assert_eq!(unfence("```console\na\n```\n"), "a");
+        assert_eq!(unfence("```\nstreaming"), "streaming");
+        assert_eq!(unfence("plain ```x```"), "plain ```x```");
     }
 
     #[test]
