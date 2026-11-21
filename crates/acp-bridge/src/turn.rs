@@ -53,7 +53,8 @@ struct ToolEntry {
     /// How the call ended, once it has.
     outcome: Option<Outcome>,
     /// `item/started` went out. A file change waits for its diff: the TUI
-    /// draws the change (and its `+N -M`) once, from `item/started`.
+    /// draws the change (and its `+N -M`) once, from `item/started`. Other
+    /// calls wait for their input ([`tool_calls::awaiting_input`]).
     announced: bool,
     finished: bool,
 }
@@ -407,6 +408,10 @@ impl TurnBuilder {
             self.refresh_file_change(&key, None, emit);
             self.announce(&key, emit);
         }
+        // Any other call the user is asked about shows up now.
+        if self.tools.get(&key).is_some_and(|entry| !entry.finished) {
+            self.announce(&key, emit);
+        }
         let entry = &self.tools[&key];
         (
             item_id(&self.items[entry.index].payload).to_string(),
@@ -512,7 +517,8 @@ impl TurnBuilder {
         // Agents announce an edit before its diff is known (claude-agent-acp
         // sends "Edit" with no content while the input streams), so a file
         // change starts at its permission request or when it finishes.
-        let announced = kind != ItemKind::FileChange;
+        // Other calls start once their input is known.
+        let announced = kind != ItemKind::FileChange && !tool_calls::awaiting_input(&call);
         if announced {
             self.started(index, emit);
         }
@@ -570,6 +576,11 @@ impl TurnBuilder {
             return;
         }
         tool_calls::apply_update(&mut entry.call, update.fields);
+        if !entry.announced && entry.kind != ItemKind::FileChange {
+            // Nothing was drawn yet, so the item can follow the input (a
+            // read gains the locations that make it part of "Explored").
+            entry.kind = tool_calls::classify(&entry.call);
+        }
         let kind = entry.kind;
         let finished = tool_calls::outcome(&entry.call) != Outcome::Running;
         match kind {
@@ -578,6 +589,9 @@ impl TurnBuilder {
                 let index = self.tools[&key].index;
                 if let Some(payload) = self.running_payload(&key) {
                     self.items[index].payload = payload;
+                }
+                if !tool_calls::awaiting_input(&self.tools[&key].call) {
+                    self.announce(&key, emit);
                 }
                 if kind == ItemKind::Command {
                     self.emit_output(&key, emit);
@@ -594,6 +608,10 @@ impl TurnBuilder {
         let Some(entry) = self.tools.get_mut(key) else {
             return;
         };
+        if !entry.announced {
+            // The output goes out with the item once it starts.
+            return;
+        }
         let output = tool_calls::output_text(&entry.call);
         let delta = match output.strip_prefix(entry.emitted_output.as_str()) {
             Some(delta) => delta.to_string(),
@@ -941,6 +959,108 @@ mod tests {
                 "item/completed",
             ]
         );
+    }
+
+    fn started_payloads(emit: &Emit) -> Vec<ThreadItemPayload> {
+        emit.iter()
+            .filter_map(|notification| match notification {
+                ServerNotification::ItemStarted(started) => Some(started.item.payload.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn command_waits_for_its_input_before_it_starts() {
+        // claude-agent-acp: a placeholder title and empty input while the
+        // model streams the call, then the real command.
+        let mut turn = builder();
+        let mut emit = Vec::new();
+        turn.tool_call(
+            acp::ToolCall::new("c1", "Terminal")
+                .kind(acp::ToolKind::Execute)
+                .raw_input(serde_json::json!({})),
+            &mut emit,
+        );
+        assert!(emit.is_empty());
+        turn.tool_call_update(
+            acp::ToolCallUpdate::new(
+                "c1",
+                acp::ToolCallUpdateFields::new()
+                    .title("ls -la")
+                    .raw_input(serde_json::json!({"command": "ls -la"})),
+            ),
+            &mut emit,
+        );
+        turn.tool_call_update(
+            acp::ToolCallUpdate::new(
+                "c1",
+                acp::ToolCallUpdateFields::new()
+                    .content(vec!["total 0\n".into()])
+                    .status(acp::ToolCallStatus::Completed),
+            ),
+            &mut emit,
+        );
+        assert_eq!(
+            methods(&emit),
+            vec![
+                "item/started",
+                "item/commandExecution/outputDelta",
+                "item/completed",
+            ]
+        );
+        assert!(matches!(
+            &started_payloads(&emit)[..],
+            [ThreadItemPayload::CommandExecution { command, .. }] if command == "ls -la"
+        ));
+    }
+
+    #[test]
+    fn waiting_call_starts_when_it_finishes_without_input() {
+        let mut turn = builder();
+        let mut emit = Vec::new();
+        turn.tool_call(
+            acp::ToolCall::new("c1", "Terminal")
+                .kind(acp::ToolKind::Execute)
+                .raw_input(serde_json::json!({})),
+            &mut emit,
+        );
+        turn.tool_call_update(
+            acp::ToolCallUpdate::new(
+                "c1",
+                acp::ToolCallUpdateFields::new().status(acp::ToolCallStatus::Failed),
+            ),
+            &mut emit,
+        );
+        assert_eq!(methods(&emit), vec!["item/started", "item/completed"]);
+    }
+
+    #[test]
+    fn waiting_read_becomes_an_explored_read_once_its_path_is_known() {
+        let mut turn = builder();
+        let mut emit = Vec::new();
+        turn.tool_call(
+            acp::ToolCall::new("r1", "Read File")
+                .kind(acp::ToolKind::Read)
+                .raw_input(serde_json::json!({})),
+            &mut emit,
+        );
+        assert!(emit.is_empty());
+        turn.tool_call_update(
+            acp::ToolCallUpdate::new(
+                "r1",
+                acp::ToolCallUpdateFields::new()
+                    .title("Read src/lib.rs")
+                    .raw_input(serde_json::json!({"file_path": "/w/src/lib.rs"}))
+                    .locations(vec![acp::ToolCallLocation::new("/w/src/lib.rs")]),
+            ),
+            &mut emit,
+        );
+        assert!(matches!(
+            &started_payloads(&emit)[..],
+            [ThreadItemPayload::CommandExecution { command_actions, .. }]
+                if matches!(command_actions[..], [codex_app_server_protocol::CommandAction::Read { .. }])
+        ));
     }
 
     fn subagent_meta(parent: &str) -> acp::Meta {

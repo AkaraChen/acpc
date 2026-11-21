@@ -38,6 +38,25 @@ fn has_diff(content: &[acp::ToolCallContent]) -> bool {
         .any(|content| matches!(content, acp::ToolCallContent::Diff(_)))
 }
 
+/// Whether the agent announced the call before its input arrived.
+/// claude-agent-acp sends a call as soon as the model starts it, with an empty
+/// `rawInput` and a placeholder title ("Terminal" for a command), and refines
+/// the title and input as they stream in. The TUI draws a call from its
+/// `item/started` and does not redraw the title later, so the call waits for
+/// its input. A call that runs, produces output or finishes no longer waits.
+pub(crate) fn awaiting_input(call: &acp::ToolCall) -> bool {
+    if call.status != acp::ToolCallStatus::Pending || !output_text(call).is_empty() {
+        return false;
+    }
+    let Some(serde_json::Value::Object(input)) = &call.raw_input else {
+        return false;
+    };
+    match call.kind {
+        acp::ToolKind::Execute => !input.contains_key("command"),
+        _ => input.is_empty(),
+    }
+}
+
 pub(crate) fn classify(call: &acp::ToolCall) -> ItemKind {
     match call.kind {
         acp::ToolKind::Execute => ItemKind::Command,
