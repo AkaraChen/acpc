@@ -333,6 +333,41 @@ fn scenario_with_history() -> Value {
 }
 
 #[tokio::test]
+async fn agent_picker_queries_list_no_sessions() {
+    // The TUI's agent picker asks for a thread's spawned agents and for
+    // archived threads. ACP sessions are neither; listing them there marks
+    // the open conversation archived, and the TUI then refuses to send.
+    let mut harness = Harness::start(HarnessConfig {
+        scenario: Some(scenario_with_history()),
+        ..HarnessConfig::default()
+    })
+    .await;
+    let listed = |list: &serde_json::Value| list["data"].as_array().expect("data").len();
+    let all = harness
+        .request("thread/list", json!({}))
+        .await
+        .expect("thread/list");
+    assert!(listed(&all) > 0);
+    let interactive = harness
+        .request("thread/list", json!({"sourceKinds": ["cli", "vscode"]}))
+        .await
+        .expect("thread/list");
+    assert_eq!(listed(&interactive), listed(&all));
+    for params in [
+        json!({"archived": true}),
+        json!({"sourceKinds": ["subAgentThreadSpawn"], "archived": false}),
+        json!({"ancestorThreadId": "00000000-0000-0000-0000-000000000000"}),
+        json!({"parentThreadId": "00000000-0000-0000-0000-000000000000"}),
+    ] {
+        let list = harness
+            .request("thread/list", params.clone())
+            .await
+            .expect("thread/list");
+        assert_eq!(listed(&list), 0, "{params}");
+    }
+}
+
+#[tokio::test]
 async fn list_and_resume_rebuild_history() {
     let mut harness = Harness::start(HarnessConfig {
         scenario: Some(scenario_with_history()),

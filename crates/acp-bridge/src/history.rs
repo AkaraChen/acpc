@@ -15,6 +15,7 @@ use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadReadResponse;
+use codex_app_server_protocol::ThreadSourceKind;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_transport::ConnectionId;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -71,6 +72,23 @@ fn register_listed(
 /// list newest first.
 const LAST_PAGES: usize = 10;
 
+/// Whether `params` asks for threads no ACP session can be. Agent sessions
+/// are top-level interactive threads: never archived, never spawned by
+/// another thread (they carry the `cli` source). The TUI's agent picker
+/// lists a thread's spawned agents and archived threads; answering those
+/// with the agent's sessions would show every session as a subagent and
+/// mark the open conversation archived, which makes it read-only.
+fn matches_no_session(params: &ThreadListParams) -> bool {
+    params.archived == Some(true)
+        || params.parent_thread_id.is_some()
+        || params.ancestor_thread_id.is_some()
+        || params.attached_to_thread_id.is_some()
+        || params
+            .source_kinds
+            .as_ref()
+            .is_some_and(|kinds| !kinds.is_empty() && !kinds.contains(&ThreadSourceKind::Cli))
+}
+
 /// `thread/list` → `session/list` on the current agent.
 pub(crate) fn list(
     bridge: &mut Bridge,
@@ -78,6 +96,19 @@ pub(crate) fn list(
     id: RequestId,
     params: ThreadListParams,
 ) {
+    if matches_no_session(&params) {
+        bridge.respond(
+            conn,
+            id,
+            ThreadListResponse {
+                data: Vec::new(),
+                read_states: None,
+                next_cursor: None,
+                backwards_cursor: None,
+            },
+        );
+        return;
+    }
     let agent = bridge.agents.current.clone();
     // `--last` asks for one thread from the start of the list.
     let last = params.limit == Some(1) && params.cursor.is_none();
