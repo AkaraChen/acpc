@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Build acpc in release mode on this machine and install it, without waiting
+# for the release workflow. Builds reuse target/, so after the first one only
+# what changed is compiled.
+#
+#   scripts/install-local            # build third_party/codex as it is now
+#   scripts/install-local --sync     # first re-apply UPSTREAM + patches/ (discards local edits there)
+#
+# Environment:
+#   ACPC_INSTALL_DIR   where to put the binary (default: ~/.local/bin)
+#   ACPC_LOCAL_VERSION version string for `acpc --version` (default: from git, e.g. 0.1.8-3-gabc1234)
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+install_dir="${ACPC_INSTALL_DIR:-$HOME/.local/bin}"
+codex_rs="$root/third_party/codex/codex-rs"
+
+say() { printf 'install-local: %s\n' "$*" >&2; }
+
+if [[ "${1:-}" == "--sync" ]]; then
+  "$root/scripts/sync-upstream"
+elif [[ ! -d "$codex_rs" ]]; then
+  say "$codex_rs is missing; run scripts/sync-upstream first (or pass --sync)"
+  exit 1
+fi
+
+# Patches exported from the checkout but not applied to it (or the reverse) mean
+# the binary would not match what a release builds.
+rev="$(tr -d '[:space:]' < "$root/UPSTREAM")"
+applied="$(git -C "$root/third_party/codex" rev-list --count "$rev..HEAD" 2>/dev/null || echo "?")"
+patches="$(find "$root/patches" -name '*.patch' | wc -l | tr -d ' ')"
+if [[ "$applied" != "$patches" ]]; then
+  say "warning: third_party/codex has $applied commits on top of UPSTREAM, patches/ has $patches; run with --sync to match patches/"
+fi
+
+version="${ACPC_LOCAL_VERSION:-$(git -C "$root" describe --tags --always --dirty 2>/dev/null || echo local)}"
+version="${version#v}"
+
+# Same settings as the release workflow.
+export CARGO_TARGET_DIR="$root/target"
+export CARGO_PROFILE_RELEASE_DEBUG=false
+export CARGO_PROFILE_RELEASE_STRIP=symbols
+export ACPC_RELEASE_VERSION="$version"
+
+say "building acpc $version (release)"
+start="$(date +%s)"
+(cd "$codex_rs" && cargo build --release --locked -p acpc --bin acpc)
+say "built in $(( $(date +%s) - start ))s"
+
+mkdir -p "$install_dir"
+# install(1) replaces the file instead of overwriting the running binary in place.
+install -m 755 "$CARGO_TARGET_DIR/release/acpc" "$install_dir/acpc"
+say "installed $install_dir/acpc"
+"$install_dir/acpc" --version
+case ":$PATH:" in
+  *":$install_dir:"*) ;;
+  *) say "note: $install_dir is not on PATH" ;;
+esac

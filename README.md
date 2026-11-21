@@ -84,8 +84,18 @@ Put `target/debug/acpc` on your `PATH`. The first build compiles the Codex
 workspace and takes a while. Install [mold](https://github.com/rui314/mold)
 and `just` links with it automatically, so later rebuilds relink in seconds.
 
+To use a release build of your working tree without waiting for CI, run
+`just install` (`scripts/install-local`). It builds with the release profile
+and installs `acpc` into `~/.local/bin` (or `$ACPC_INSTALL_DIR`); later runs
+only recompile what changed. `scripts/install-local --sync` first re-applies
+`UPSTREAM` and `patches/`, discarding local edits in `third_party/codex`.
+
 Pushing a `v*` tag builds release archives for Linux (musl), macOS and
-Windows and publishes them on a GitHub Release.
+Windows and publishes them on a GitHub Release. A run takes over an hour, so
+the workflow keeps its dependency cache on `main`: tags can only read caches
+saved by the default branch. Run the `release` workflow by hand on `main`
+(Actions > release > Run workflow) after `Cargo.lock` or `UPSTREAM` changes;
+it also runs weekly.
 
 ## Adding agents
 

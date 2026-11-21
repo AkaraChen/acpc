@@ -35,6 +35,10 @@ clippy *args:
 fmt:
     cd {{codex_rs}} && cargo fmt -p acp-client -p acp-bridge -p acpc -p acpc-mock-agent
 
+# Build in release mode here and install to ~/.local/bin (no CI wait).
+install *args:
+    {{root}}/scripts/install-local {{args}}
+
 # Copy the workspace lockfile back after dependency changes.
 lock:
     cp {{codex_rs}}/Cargo.lock {{root}}/Cargo.lock
