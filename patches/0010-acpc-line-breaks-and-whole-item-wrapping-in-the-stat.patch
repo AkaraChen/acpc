@@ -1,0 +1,479 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: jimmy <tliang92@gmail.com>
+Date: Sat, 21 Nov 2026 11:20:35 +0800
+Subject: [PATCH] acpc: line breaks and whole-item wrapping in the status line
+
+/statusline gains line-break and line-break-2 items that start a new
+row. Rows that overflow now wrap between items instead of splitting
+one across rows; an item wider than the row still wraps at words.
+---
+ .../references/statusline.d.ts                |  2 +-
+ .../chat_composer/status_surface_tests.rs     |  6 +-
+ codex-rs/tui/src/bottom_pane/status_line.rs   | 88 ++++++++++++++++++-
+ .../tui/src/bottom_pane/status_line_setup.rs  | 16 ++++
+ .../tui/src/bottom_pane/status_line_style.rs  | 57 +++++++++++-
+ .../tui/src/bottom_pane/status_line_tests.rs  | 88 +++++++++++++++++++
+ .../src/bottom_pane/status_surface_preview.rs |  5 ++
+ .../tui/src/chatwidget/status_surfaces.rs     |  3 +
+ 8 files changed, 259 insertions(+), 6 deletions(-)
+
+diff --git a/codex-rs/skills/src/assets/samples/create-statusline/references/statusline.d.ts b/codex-rs/skills/src/assets/samples/create-statusline/references/statusline.d.ts
+index 4e65a72..d606543 100644
+--- a/codex-rs/skills/src/assets/samples/create-statusline/references/statusline.d.ts
++++ b/codex-rs/skills/src/assets/samples/create-statusline/references/statusline.d.ts
+@@ -90,7 +90,7 @@ export type Usage = { context: Context, total?: TokenUsage, cost?: Cost, };
+ 
+ export type Workspace = { cwd: string, };
+ 
+-export type StatuslineItemId = "model" | "model-with-reasoning" | "reasoning" | "current-dir" | "project-name" | "hostname" | "git-branch" | "pull-request-number" | "branch-changes" | "run-state" | "permissions" | "approval-mode" | "context-remaining" | "context-used" | "five-hour-limit" | "weekly-limit" | "codex-version" | "context-window-size" | "used-tokens" | "total-input-tokens" | "total-output-tokens" | "thread-credits" | "estimated-thread-cost" | "thread-id" | "fast-mode" | "daybreak" | "raw-output" | "thread-name" | "thread-title" | "workspace-headline" | "task-progress" | "profile" | "provider";
++export type StatuslineItemId = "model" | "model-with-reasoning" | "reasoning" | "current-dir" | "project-name" | "hostname" | "git-branch" | "pull-request-number" | "branch-changes" | "run-state" | "permissions" | "approval-mode" | "context-remaining" | "context-used" | "five-hour-limit" | "weekly-limit" | "codex-version" | "context-window-size" | "used-tokens" | "total-input-tokens" | "total-output-tokens" | "thread-credits" | "estimated-thread-cost" | "thread-id" | "fast-mode" | "daybreak" | "raw-output" | "thread-name" | "thread-title" | "workspace-headline" | "task-progress" | "profile" | "provider" | "line-break" | "line-break-2";
+ export type TextElement = Extract<Element, { type: "text" }>;
+ export type BoldElement = Extract<Element, { type: "bold" }>;
+ export type ItalicElement = Extract<Element, { type: "italic" }>;
+diff --git a/codex-rs/tui/src/bottom_pane/chat_composer/status_surface_tests.rs b/codex-rs/tui/src/bottom_pane/chat_composer/status_surface_tests.rs
+index 0466015..b6efa02 100644
+--- a/codex-rs/tui/src/bottom_pane/chat_composer/status_surface_tests.rs
++++ b/codex-rs/tui/src/bottom_pane/chat_composer/status_surface_tests.rs
+@@ -578,13 +578,13 @@ fn native_wrap_tracks_agent_label_and_content_changes_at_the_same_width() {
+         composer.set_active_agent_label(Some(agent.into()));
+         assert_eq!(
+             render_status(&composer, area, Default::default()).1,
+-            ["build ready ·", agent]
++            ["build ready", agent]
+         );
+     }
+     composer.set_status_line(Some(Line::from("tests green").into()));
+     assert_eq!(
+         render_status(&composer, area, Default::default()).1,
+-        ["tests green ·", "backend"]
++        ["tests green", "backend"]
+     );
+     let wide = Rect { width: 36, ..area };
+     assert_eq!(
+@@ -593,7 +593,7 @@ fn native_wrap_tracks_agent_label_and_content_changes_at_the_same_width() {
+     );
+     assert_eq!(
+         render_status(&composer, area, Default::default()).1,
+-        ["tests green ·", "backend"]
++        ["tests green", "backend"]
+     );
+ }
+ 
+diff --git a/codex-rs/tui/src/bottom_pane/status_line.rs b/codex-rs/tui/src/bottom_pane/status_line.rs
+index 76109b7..766b153 100644
+--- a/codex-rs/tui/src/bottom_pane/status_line.rs
++++ b/codex-rs/tui/src/bottom_pane/status_line.rs
+@@ -1,5 +1,7 @@
+ //! Measure and paint native and extension status lines within the caller's content rectangle.
+ 
++use super::status_line_style::STATUS_LINE_ROW_BREAK;
++use super::status_line_style::STATUS_LINE_SEPARATOR;
+ use crate::line_truncation::truncate_line_with_ellipsis;
+ use crate::render::highlight::with_syntax_theme;
+ use crate::render::line_utils::line_to_static;
+@@ -18,6 +20,7 @@ use ratatui::text::Span;
+ use std::borrow::Cow;
+ use std::cell::Ref;
+ use std::cell::RefCell;
++use std::ops::Range;
+ use std::sync::Arc;
+ use unicode_segmentation::UnicodeSegmentation;
+ 
+@@ -176,7 +179,8 @@ fn wrapped_rows(
+         ..bounds
+     };
+     let cached = native.get(bounds, |line| {
+-        (line.width() > usize::from(bounds.width)).then(|| wrap_rows(line, bounds))
++        (line.width() > usize::from(bounds.width) || has_row_break(line))
++            .then(|| layout_rows(line, bounds))
+     });
+     Ref::filter_map(cached, Option::as_deref).ok()
+ }
+@@ -206,6 +210,88 @@ fn render_status_row(
+     line.render_fitted(area, buf);
+ }
+ 
++fn has_row_break(status: &HyperlinkLine) -> bool {
++    status
++        .line
++        .spans
++        .iter()
++        .any(|span| span.content == STATUS_LINE_ROW_BREAK)
++}
++
++/// Splits a status line into rows: a new row at every row break, and otherwise
++/// as many whole items per row as fit. Items are never split across rows
++/// unless a single item is wider than the row, which then wraps at words.
++fn layout_rows(status: &HyperlinkLine, bounds: Size) -> Vec<HyperlinkLine> {
++    let width = usize::from(bounds.width);
++    // Same lookahead budget as `wrap_rows`, so the last visible row knows it is cut off.
++    let limit = usize::from(bounds.height) + 1;
++    let spans = &status.line.spans;
++    let mut columns = Vec::with_capacity(spans.len() + 1);
++    let mut column = 0;
++    for span in spans {
++        columns.push(column);
++        column += display_width(&span.content);
++    }
++    columns.push(column);
++    let span_width = |range: &Range<usize>| columns[range.end] - columns[range.start];
++
++    let mut rows = Vec::new();
++    let mut row = 0..0;
++    let mut item_start = 0;
++    let mut pending_separator: Option<usize> = None;
++    let flush = |row: Range<usize>, rows: &mut Vec<HyperlinkLine>| {
++        if row.is_empty() || rows.len() >= limit {
++            return;
++        }
++        let piece = HyperlinkLine {
++            line: Line {
++                spans: spans[row.clone()].to_vec(),
++                ..status.line.clone()
++            },
++            hyperlinks: project_hyperlink_columns(
++                &status.hyperlinks,
++                columns[row.start]..columns[row.end],
++                /*prefix*/ 0,
++            ),
++            source: None,
++        };
++        if piece.width() > width {
++            rows.extend(wrap_rows(&piece, bounds));
++        } else {
++            rows.push(piece);
++        }
++        rows.truncate(limit);
++    };
++    for index in 0..=spans.len() {
++        let separator = spans.get(index).map(|span| span.content.as_ref());
++        let is_separator = matches!(
++            separator,
++            Some(STATUS_LINE_SEPARATOR) | Some(STATUS_LINE_ROW_BREAK)
++        );
++        if !is_separator && index < spans.len() {
++            continue;
++        }
++        // `item_start..index` is one item; place it after the pending separator or on a new row.
++        let item = item_start..index;
++        match pending_separator {
++            None => row = item,
++            Some(separator) => {
++                let joined = row.start..item.end;
++                let hard = spans[separator].content == STATUS_LINE_ROW_BREAK;
++                if !hard && span_width(&joined) <= width {
++                    row = joined;
++                } else {
++                    flush(std::mem::replace(&mut row, item), &mut rows);
++                }
++            }
++        }
++        pending_separator = is_separator.then_some(index);
++        item_start = index + 1;
++    }
++    flush(row, &mut rows);
++    rows
++}
++
+ fn wrap_rows(status: &HyperlinkLine, bounds: Size) -> Vec<HyperlinkLine> {
+     let line = &status.line;
+     let width = usize::from(bounds.width);
+diff --git a/codex-rs/tui/src/bottom_pane/status_line_setup.rs b/codex-rs/tui/src/bottom_pane/status_line_setup.rs
+index 7d8894e..b65ea58 100644
+--- a/codex-rs/tui/src/bottom_pane/status_line_setup.rs
++++ b/codex-rs/tui/src/bottom_pane/status_line_setup.rs
+@@ -166,6 +166,13 @@ pub(crate) enum StatusLineItem {
+     /// Model provider ID for the active thread.
+     #[strum(to_string = "provider", serialize = "model-provider")]
+     Provider,
++
++    /// Starts a new status line row; the items after it render below.
++    LineBreak,
++
++    /// A second row break, so the status line can be split into three rows.
++    #[strum(to_string = "line-break-2")]
++    LineBreak2,
+ }
+ 
+ impl serde::Serialize for StatusLineItem {
+@@ -238,9 +245,16 @@ impl StatusLineItem {
+             StatusLineItem::TaskProgress => {
+                 "Latest task progress from update_plan (omitted until available)"
+             }
++            StatusLineItem::LineBreak => "Start a new row here",
++            StatusLineItem::LineBreak2 => "Start another new row here",
+         }
+     }
+ 
++    /// Whether this item splits the status line into rows instead of showing a value.
++    pub(crate) fn is_line_break(self) -> bool {
++        matches!(self, StatusLineItem::LineBreak | StatusLineItem::LineBreak2)
++    }
++
+     pub(crate) fn preview_item(self) -> StatusSurfacePreviewItem {
+         match self {
+             StatusLineItem::ModelName => StatusSurfacePreviewItem::Model,
+@@ -276,6 +290,8 @@ impl StatusLineItem {
+             StatusLineItem::ThreadTitle => StatusSurfacePreviewItem::ThreadTitle,
+             StatusLineItem::WorkspaceHeadline => StatusSurfacePreviewItem::WorkspaceHeadline,
+             StatusLineItem::TaskProgress => StatusSurfacePreviewItem::TaskProgress,
++            StatusLineItem::LineBreak => StatusSurfacePreviewItem::LineBreak,
++            StatusLineItem::LineBreak2 => StatusSurfacePreviewItem::LineBreak2,
+         }
+     }
+ }
+diff --git a/codex-rs/tui/src/bottom_pane/status_line_style.rs b/codex-rs/tui/src/bottom_pane/status_line_style.rs
+index 59426ad..02a8884 100644
+--- a/codex-rs/tui/src/bottom_pane/status_line_style.rs
++++ b/codex-rs/tui/src/bottom_pane/status_line_style.rs
+@@ -16,6 +16,10 @@ use crate::thread_color::thread_color;
+ use codex_protocol::ThreadId;
+ 
+ pub(crate) const STATUS_LINE_SEPARATOR: &str = " · ";
++/// Separates two items that a `line-break` item puts on different rows. It
++/// looks like [`STATUS_LINE_SEPARATOR`] (no-break spaces instead of spaces) so
++/// it reads naturally wherever the status line is drawn as a single row.
++pub(crate) const STATUS_LINE_ROW_BREAK: &str = "\u{a0}·\u{a0}";
+ const STATUS_LINE_COLOR_SATURATION_PERCENT: u16 = 85;
+ const STATUS_LINE_COLOR_BRIGHTNESS_PERCENT: u16 = 100;
+ 
+@@ -82,6 +86,7 @@ impl StatusLineAccent {
+             | StatusLineItem::ThreadTitle
+             | StatusLineItem::WorkspaceHeadline => Self::Thread,
+             StatusLineItem::TaskProgress => Self::Progress,
++            StatusLineItem::LineBreak | StatusLineItem::LineBreak2 => Self::Metadata,
+         }
+     }
+ 
+@@ -139,13 +144,25 @@ where
+     F: Fn(StatusLineAccent) -> Option<Style>,
+ {
+     let mut line = HyperlinkLine::default();
++    let mut row_break = false;
+     for (item, mut text) in segments {
++        // Breaks only separate shown items: leading, trailing and repeated ones vanish.
++        if item.is_line_break() {
++            row_break = true;
++            continue;
++        }
+         // Paragraph skips control characters, so they must not enter this single row's link offsets.
+         text.retain(|ch| !ch.is_control());
+         if !line.line.spans.is_empty() {
++            let separator = if row_break {
++                STATUS_LINE_ROW_BREAK
++            } else {
++                STATUS_LINE_SEPARATOR
++            };
+             line.line
+-                .push_span(STATUS_LINE_SEPARATOR.set_style(secondary_text_style()));
++                .push_span(separator.set_style(secondary_text_style()));
+         }
++        row_break = false;
+         let style = if use_theme_colors
+             && matches!(
+                 item,
+@@ -387,6 +404,44 @@ mod tests {
+         assert_eq!(line.spans[0].style, secondary_text_style().underlined());
+     }
+ 
++    #[test]
++    fn line_breaks_become_row_breaks_only_between_shown_items() {
++        let line = status_line_from_segments_with_resolver(
++            [
++                (StatusLineItem::LineBreak, String::new()),
++                (StatusLineItem::ModelName, "gpt-5".to_string()),
++                (StatusLineItem::LineBreak, String::new()),
++                (StatusLineItem::LineBreak2, String::new()),
++                (StatusLineItem::CurrentDir, "/repo".to_string()),
++                (StatusLineItem::GitBranch, "main".to_string()),
++                (StatusLineItem::LineBreak2, String::new()),
++            ],
++            /*use_theme_colors*/ false,
++            /*thread_id*/ None,
++            /*pull_request_url*/ None,
++            |_| None,
++        )
++        .expect("status line")
++        .line;
++
++        let spans = line
++            .spans
++            .iter()
++            .map(|span| span.content.as_ref())
++            .collect::<Vec<_>>();
++        assert_eq!(
++            spans,
++            [
++                "gpt-5",
++                STATUS_LINE_ROW_BREAK,
++                "/repo",
++                STATUS_LINE_SEPARATOR,
++                "main"
++            ]
++        );
++        assert_eq!(line.spans[1].style, secondary_text_style());
++    }
++
+     #[test]
+     fn status_line_segments_return_none_when_empty() {
+         assert_eq!(
+diff --git a/codex-rs/tui/src/bottom_pane/status_line_tests.rs b/codex-rs/tui/src/bottom_pane/status_line_tests.rs
+index 5c0b76f..b011127 100644
+--- a/codex-rs/tui/src/bottom_pane/status_line_tests.rs
++++ b/codex-rs/tui/src/bottom_pane/status_line_tests.rs
+@@ -1,5 +1,7 @@
+ #![cfg(test)]
+ 
++use super::super::status_line_style::STATUS_LINE_ROW_BREAK;
++use super::super::status_line_style::STATUS_LINE_SEPARATOR;
+ use super::StatusLine;
+ use super::StatusLineFocus;
+ use crate::terminal_hyperlinks::HyperlinkLine;
+@@ -7,6 +9,7 @@ use crate::terminal_hyperlinks::osc8_hyperlink;
+ use pretty_assertions::assert_eq;
+ use ratatui::buffer::Buffer;
+ use ratatui::layout::Rect;
++use ratatui::layout::Size;
+ 
+ #[test]
+ fn clipped_links_keep_their_cells_after_a_halfwidth_katakana_grapheme() {
+@@ -92,3 +95,88 @@ fn prepared_tree_paints_only_the_footer_viewport() {
+     assert_eq!(buffer[(1, 4)].symbol(), osc8_hyperlink(url, "a"));
+     assert_eq!(buffer[(2, 4)].symbol(), "…");
+ }
++
++fn status_of(items: &[&str], separators: &[&str]) -> StatusLine {
++    let mut line = HyperlinkLine::default();
++    for (index, item) in items.iter().enumerate() {
++        if index > 0 {
++            line.push_span(
++                separators[index - 1].to_string().into(),
++                /*destination*/ None,
++            );
++        }
++        line.push_span(item.to_string().into(), /*destination*/ None);
++    }
++    StatusLine::from(line)
++}
++
++fn rendered_rows(status: &StatusLine, width: u16, height: u16) -> Vec<String> {
++    let rows = status.height(Size { width, height });
++    let area = Rect::new(/*x*/ 0, /*y*/ 0, width, rows);
++    let mut buf = Buffer::empty(area);
++    status.render(area, &mut buf, StatusLineFocus::Focused);
++    (0..rows)
++        .map(|y| {
++            (0..width)
++                .map(|x| buf[(x, y)].symbol().replace('\u{a0}', " "))
++                .collect::<String>()
++                .trim_end()
++                .to_string()
++        })
++        .collect()
++}
++
++#[test]
++fn row_breaks_start_new_rows_even_when_the_line_fits() {
++    let status = status_of(
++        &["gpt-5 high", "Context 80% left", "~/repo", "main"],
++        &[
++            STATUS_LINE_SEPARATOR,
++            STATUS_LINE_ROW_BREAK,
++            STATUS_LINE_SEPARATOR,
++        ],
++    );
++    assert_eq!(
++        rendered_rows(&status, /*width*/ 80, /*height*/ 3),
++        ["gpt-5 high · Context 80% left", "~/repo · main"]
++    );
++}
++
++#[test]
++fn row_breaks_read_as_separators_on_a_single_row() {
++    let status = status_of(&["gpt-5", "~/repo"], &[STATUS_LINE_ROW_BREAK]);
++    assert_eq!(
++        rendered_rows(&status, /*width*/ 80, /*height*/ 1),
++        ["gpt-5 · ~/repo"]
++    );
++}
++
++#[test]
++fn overflow_wraps_between_items_without_splitting_them() {
++    let status = status_of(
++        &["Ask for approval", "Custom permissions", "0 in", "0 out"],
++        &[STATUS_LINE_SEPARATOR; 3],
++    );
++    assert_eq!(
++        rendered_rows(&status, /*width*/ 30, /*height*/ 3),
++        ["Ask for approval", "Custom permissions · 0 in", "0 out"]
++    );
++}
++
++#[test]
++fn an_item_wider_than_the_row_still_wraps_at_words() {
++    let status = status_of(&["one two three four", "five"], &[STATUS_LINE_SEPARATOR]);
++    assert_eq!(
++        rendered_rows(&status, /*width*/ 10, /*height*/ 4),
++        ["one two", "three four", "five"]
++    );
++}
++
++#[test]
++fn rows_past_the_limit_end_with_an_ellipsis() {
++    let status = status_of(&["alpha", "beta", "gamma"], &[STATUS_LINE_ROW_BREAK; 2]);
++    assert_eq!(
++        rendered_rows(&status, /*width*/ 20, /*height*/ 2),
++        ["alpha", "beta…"]
++    );
++}
+diff --git a/codex-rs/tui/src/bottom_pane/status_surface_preview.rs b/codex-rs/tui/src/bottom_pane/status_surface_preview.rs
+index 414db2c..9dd287f 100644
+--- a/codex-rs/tui/src/bottom_pane/status_surface_preview.rs
++++ b/codex-rs/tui/src/bottom_pane/status_surface_preview.rs
+@@ -48,6 +48,8 @@ pub(crate) enum StatusSurfacePreviewItem {
+     Profile,
+     Provider,
+     TaskProgress,
++    LineBreak,
++    LineBreak2,
+ }
+ 
+ impl StatusSurfacePreviewItem {
+@@ -88,6 +90,7 @@ impl StatusSurfacePreviewItem {
+             StatusSurfacePreviewItem::Profile => "profile: <name>",
+             StatusSurfacePreviewItem::Provider => "provider: <id>",
+             StatusSurfacePreviewItem::TaskProgress => "Tasks 0/0",
++            StatusSurfacePreviewItem::LineBreak | StatusSurfacePreviewItem::LineBreak2 => "",
+         }
+     }
+ 
+@@ -128,6 +131,8 @@ impl StatusSurfacePreviewItem {
+             Self::Profile,
+             Self::Provider,
+             Self::TaskProgress,
++            Self::LineBreak,
++            Self::LineBreak2,
+         ]
+         .into_iter()
+     }
+diff --git a/codex-rs/tui/src/chatwidget/status_surfaces.rs b/codex-rs/tui/src/chatwidget/status_surfaces.rs
+index 45ff5f1..cb833b1 100644
+--- a/codex-rs/tui/src/chatwidget/status_surfaces.rs
++++ b/codex-rs/tui/src/chatwidget/status_surfaces.rs
+@@ -849,6 +849,7 @@ impl ChatWidget {
+             }
+             StatusLineItem::WorkspaceHeadline => self.status_line_workspace_headline.clone(),
+             StatusLineItem::TaskProgress => self.terminal_title_task_progress(),
++            StatusLineItem::LineBreak | StatusLineItem::LineBreak2 => Some(String::new()),
+         }
+     }
+ 
+@@ -869,6 +870,8 @@ impl ChatWidget {
+             StatusSurfacePreviewItem::ProjectRoot => StatusLineItem::ProjectRoot,
+             StatusSurfacePreviewItem::Status => return Some(self.run_state_status_text()),
+             StatusSurfacePreviewItem::TaskProgress => return self.terminal_title_task_progress(),
++            StatusSurfacePreviewItem::LineBreak => StatusLineItem::LineBreak,
++            StatusSurfacePreviewItem::LineBreak2 => StatusLineItem::LineBreak2,
+             StatusSurfacePreviewItem::CurrentDir => StatusLineItem::CurrentDir,
+             StatusSurfacePreviewItem::Hostname => StatusLineItem::Hostname,
+             StatusSurfacePreviewItem::ThreadName => StatusLineItem::ThreadName,

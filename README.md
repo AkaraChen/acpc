@@ -46,17 +46,17 @@ acpc
 On Linux and macOS:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/AkaraChen/acpc/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/jimmyrogue/acpc/main/install.sh | sh
 ```
 
 On Windows (PowerShell):
 
 ```powershell
-irm https://raw.githubusercontent.com/AkaraChen/acpc/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/jimmyrogue/acpc/main/install.ps1 | iex
 ```
 
 The script downloads the latest
-[release](https://github.com/AkaraChen/acpc/releases) for your platform,
+[release](https://github.com/jimmyrogue/acpc/releases) for your platform,
 verifies its checksum and installs `acpc` into `~/.local/bin`
 (`%LOCALAPPDATA%\Programs\acpc` on Windows). Set `ACPC_VERSION=v0.1.0` to
 pin a release or `ACPC_INSTALL_DIR` to install elsewhere. Run it again to
@@ -75,7 +75,7 @@ You need Rust (the toolchain installs itself from `rust-toolchain.toml`),
 `git`, a C compiler, OpenSSL headers and [just](https://github.com/casey/just).
 
 ```sh
-git clone https://github.com/AkaraChen/acpc && cd acpc
+git clone https://github.com/jimmyrogue/acpc && cd acpc
 scripts/sync-upstream          # fetch Codex at the pinned commit, apply patches/
 just build                     # → target/debug/acpc
 ```
@@ -84,8 +84,18 @@ Put `target/debug/acpc` on your `PATH`. The first build compiles the Codex
 workspace and takes a while. Install [mold](https://github.com/rui314/mold)
 and `just` links with it automatically, so later rebuilds relink in seconds.
 
+To use a release build of your working tree without waiting for CI, run
+`scripts/install-local` (or `just install`, if you have just). It builds with
+the release profile and installs `acpc` into `~/.local/bin` (or
+`$ACPC_INSTALL_DIR`); later runs only recompile what changed. `scripts/install-local --sync` first re-applies
+`UPSTREAM` and `patches/`, discarding local edits in `third_party/codex`.
+
 Pushing a `v*` tag builds release archives for Linux (musl), macOS and
-Windows and publishes them on a GitHub Release.
+Windows and publishes them on a GitHub Release. A run takes over an hour, so
+the workflow keeps its dependency cache on `main`: tags can only read caches
+saved by the default branch. Run the `release` workflow by hand on `main`
+(Actions > release > Run workflow) after `Cargo.lock` or `UPSTREAM` changes;
+it also runs weekly.
 
 ## Adding agents
 
@@ -145,7 +155,7 @@ Inside the TUI:
 | | |
 |---|---|
 | `/agent` | Switch agents. If the session has messages, choose **Bring this conversation** to fork it onto the new agent, or **Start fresh**. |
-| `/model` | The agent's models and reasoning levels. |
+| `/model` | The agent's models and reasoning levels. Enter keeps the choice as the default for new sessions; `s` applies it to this session only. |
 | `/options` | The agent's other session settings and modes. |
 | Shift+Tab | Cycle the agent's modes. |
 | `/resume` | Reopen an earlier session, including forks; they show where they came from. |
@@ -254,6 +264,8 @@ applied. `patches/*.patch` are the patches, in order:
 7. Upstream schema fixture tests skipped, since the fixtures don't include
    `acpc/*`.
 8. ANSI styles in ACP replies decoded before Markdown wrapping and table layout.
+9. An "Other" option in elicitation forms for a select's free-text companion
+   field (such as an AskUserQuestion "Other" box), asked for only when picked.
 
 To change upstream code:
 1. Edit and commit in `third_party/codex`.

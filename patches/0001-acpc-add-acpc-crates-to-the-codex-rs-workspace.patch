@@ -12,7 +12,7 @@ of V8), before it can build anything.
  1 file changed, 5 insertions(+), 4 deletions(-)
 
 diff --git a/codex-rs/Cargo.toml b/codex-rs/Cargo.toml
-index 4390ffa..cb0226a 100644
+index 4b6168b..eeb73f6 100644
 --- a/codex-rs/Cargo.toml
 +++ b/codex-rs/Cargo.toml
 @@ -1,5 +1,10 @@
@@ -26,7 +26,7 @@ index 4390ffa..cb0226a 100644
      "aws-auth",
      "analytics",
      "agent-graph-store",
-@@ -28,9 +33,7 @@ members = [
+@@ -29,9 +34,7 @@ members = [
      "install-context",
      "codex-backend-openapi-models",
      "code-mode",
@@ -36,18 +36,18 @@ index 4390ffa..cb0226a 100644
      "plugin-host",
      "codex-home",
      "cloud-config",
-@@ -119,7 +122,6 @@ members = [
-     "tui",
+@@ -122,7 +125,6 @@ members = [
+     "user-input",
      "user-verification",
      "tools",
 -    "v8-poc",
      "websocket-auth",
      "websocket-client",
      "windows-sandbox-rs/tests/support",
-@@ -682,7 +684,6 @@ opt-level = 0
- crossterm = { git = "https://github.com/openai-oss-forks/crossterm", rev = "ed1cdab335221515706178d68495bba2aed1924f" }
- tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungstenite", rev = "02cb49fa827411e9279e3688d19ab9e82661b0e8" }
- tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "db4be399bc1b8b5de2edb46c7187834edabf7e30" }
+@@ -696,7 +698,6 @@ sqlx-core = { git = "https://github.com/transact-rs/sqlx", rev = "10462fa4414c6c
+ sqlx-sqlite = { git = "https://github.com/transact-rs/sqlx", rev = "10462fa4414c6c7f1ed1d39bb31678e3b726878c" }
+ tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungstenite", rev = "7a920470d62138955446b64220c7609e46ad770e" }
+ tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "e19950ef7828cb311e6d51a6bedcebf0192e055c" }
 -v8 = { git = "https://github.com/openai-oss-forks/rusty_v8.git", rev = "90a65f887a0c0f048f3784afbcb320b373c8a2e0" }
  
  # Uncomment to debug local changes.

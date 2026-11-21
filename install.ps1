@@ -1,6 +1,6 @@
 # Install the latest acpc release on Windows.
 #
-#   irm https://raw.githubusercontent.com/AkaraChen/acpc/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/jimmyrogue/acpc/main/install.ps1 | iex
 #
 # Environment:
 #   ACPC_VERSION       release to install, e.g. v0.2.0 (default: latest)
@@ -8,7 +8,7 @@
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$repo = 'AkaraChen/acpc'
+$repo = 'jimmyrogue/acpc'
 $installDir = if ($env:ACPC_INSTALL_DIR) { $env:ACPC_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'Programs\acpc' }
 
 $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture

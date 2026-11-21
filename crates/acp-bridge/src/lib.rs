@@ -8,6 +8,7 @@
 
 mod agents;
 mod approvals;
+mod config_write;
 mod content;
 mod ext;
 mod handoff;

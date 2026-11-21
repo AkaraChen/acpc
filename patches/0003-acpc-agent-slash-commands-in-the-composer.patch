@@ -120,10 +120,10 @@ index a31eee4..f919f8d 100644
 +    enabled() && !is_reserved(name) && agent_commands.any(|command| command == name)
 +}
 diff --git a/codex-rs/tui/src/bottom_pane/chat_composer.rs b/codex-rs/tui/src/bottom_pane/chat_composer.rs
-index 56d426b..530608e 100644
+index a9433cc..722c7d8 100644
 --- a/codex-rs/tui/src/bottom_pane/chat_composer.rs
 +++ b/codex-rs/tui/src/bottom_pane/chat_composer.rs
-@@ -672,6 +672,7 @@ pub(crate) struct ChatComposer {
+@@ -694,6 +694,7 @@ pub(crate) struct ChatComposer {
      token_activity_command_enabled: bool,
      service_tier_commands_enabled: bool,
      service_tier_commands: Vec<ServiceTierCommand>,
@@ -131,7 +131,7 @@ index 56d426b..530608e 100644
      mentions_v2_enabled: bool,
      goal_command_enabled: bool,
      voice_command_enabled: bool,
-@@ -739,6 +740,7 @@ impl ChatComposer {
+@@ -763,6 +764,7 @@ impl ChatComposer {
              self.draft.is_bash_mode,
              self.builtin_command_flags(),
              &self.service_tier_commands,
@@ -139,7 +139,7 @@ index 56d426b..530608e 100644
          )
      }
  
-@@ -857,6 +859,7 @@ impl ChatComposer {
+@@ -885,6 +887,7 @@ impl ChatComposer {
              token_activity_command_enabled: false,
              service_tier_commands_enabled: false,
              service_tier_commands: Vec::new(),
@@ -147,7 +147,7 @@ index 56d426b..530608e 100644
              mentions_v2_enabled: false,
              goal_command_enabled: false,
              voice_command_enabled: false,
-@@ -1069,6 +1072,11 @@ impl ChatComposer {
+@@ -1099,6 +1102,11 @@ impl ChatComposer {
          self.update_slash_command_catalog(|composer| composer.service_tier_commands = commands);
      }
  
@@ -159,7 +159,7 @@ index 56d426b..530608e 100644
      pub fn set_goal_command_enabled(&mut self, enabled: bool) {
          self.update_slash_command_catalog(|composer| composer.goal_command_enabled = enabled);
      }
-@@ -9513,6 +9521,9 @@ mod tests {
+@@ -9561,6 +9569,9 @@ mod tests {
                      Some(CommandItem::ServiceTier(command)) => {
                          panic!("expected {expected} command, got service tier {command:?}")
                      }
@@ -170,10 +170,10 @@ index 56d426b..530608e 100644
                  },
                  _ => panic!("slash popup not active after typing '{input}'"),
 diff --git a/codex-rs/tui/src/bottom_pane/chat_composer/slash_input.rs b/codex-rs/tui/src/bottom_pane/chat_composer/slash_input.rs
-index 066e56c..a0dd703 100644
+index c59e72f..ac7caaa 100644
 --- a/codex-rs/tui/src/bottom_pane/chat_composer/slash_input.rs
 +++ b/codex-rs/tui/src/bottom_pane/chat_composer/slash_input.rs
-@@ -48,6 +48,7 @@ pub(super) struct SlashInput<'a> {
+@@ -52,6 +52,7 @@ pub(super) struct SlashInput<'a> {
      is_bash_mode: bool,
      command_flags: BuiltinCommandFlags,
      service_tier_commands: &'a [ServiceTierCommand],
@@ -181,7 +181,7 @@ index 066e56c..a0dd703 100644
  }
  
  impl<'a> SlashInput<'a> {
-@@ -56,15 +57,21 @@ impl<'a> SlashInput<'a> {
+@@ -60,15 +61,21 @@ impl<'a> SlashInput<'a> {
          is_bash_mode: bool,
          command_flags: BuiltinCommandFlags,
          service_tier_commands: &'a [ServiceTierCommand],
@@ -203,7 +203,7 @@ index 066e56c..a0dd703 100644
      pub(super) fn validate_submission(
          &self,
          text: &str,
-@@ -79,7 +86,8 @@ impl<'a> SlashInput<'a> {
+@@ -83,7 +90,8 @@ impl<'a> SlashInput<'a> {
          if input_starts_with_space || name.contains('/') {
              return SubmissionValidation::Valid;
          }
@@ -213,7 +213,7 @@ index 066e56c..a0dd703 100644
              SubmissionValidation::Valid
          } else {
              SubmissionValidation::UnknownCommand(name.to_string())
-@@ -166,6 +174,9 @@ impl<'a> SlashInput<'a> {
+@@ -170,6 +178,9 @@ impl<'a> SlashInput<'a> {
          }
  
          has_slash_command_prefix(name, self.command_flags, self.service_tier_commands)
@@ -223,7 +223,7 @@ index 066e56c..a0dd703 100644
      }
  
      pub(super) fn command_popup(&self, filter_text: &str) -> CommandPopup {
-@@ -184,12 +195,16 @@ impl<'a> SlashInput<'a> {
+@@ -188,12 +199,16 @@ impl<'a> SlashInput<'a> {
                  side_conversation_active: self.command_flags.side_conversation_active,
              },
              self.service_tier_commands.to_vec(),
@@ -241,7 +241,7 @@ index 066e56c..a0dd703 100644
          find_slash_command(name, self.command_flags, self.service_tier_commands)
      }
  }
-@@ -377,6 +392,24 @@ impl ChatComposer {
+@@ -382,6 +397,24 @@ impl ChatComposer {
                  modifiers: KeyModifiers::NONE,
                  ..
              } => {
@@ -264,9 +264,9 @@ index 066e56c..a0dd703 100644
 +                    return self.handle_key_event_without_popup(key_event);
 +                }
                  if let Some(sel) = popup.selected_item() {
-                     if self.blocks_direct_input {
+                     if self.blocks_direct_input && mode == SlashPopupInputMode::Normal {
                          let command_is_allowed = match &sel {
-@@ -385,7 +418,7 @@ impl ChatComposer {
+@@ -390,7 +423,7 @@ impl ChatComposer {
                                      |(_, args, _)| parent_owned_command_is_allowed(*cmd, args),
                                  )
                              }
@@ -275,7 +275,7 @@ index 066e56c..a0dd703 100644
                          };
                          if !command_is_allowed {
                              return (InputResult::ParentOwnedInputBlocked, true);
-@@ -412,6 +445,8 @@ impl ChatComposer {
+@@ -417,6 +450,8 @@ impl ChatComposer {
                              CommandItem::ServiceTier(command) => {
                                  InputResult::ServiceTierCommand(command)
                              }
@@ -444,10 +444,10 @@ index 93a89e8..6162773 100644
 +    }
  }
 diff --git a/codex-rs/tui/src/bottom_pane/mod.rs b/codex-rs/tui/src/bottom_pane/mod.rs
-index c1d8257..b45180c 100644
+index b65afed..8d4917f 100644
 --- a/codex-rs/tui/src/bottom_pane/mod.rs
 +++ b/codex-rs/tui/src/bottom_pane/mod.rs
-@@ -670,6 +670,12 @@ impl BottomPane {
+@@ -673,6 +673,12 @@ impl BottomPane {
          self.request_redraw();
      }
  
@@ -474,10 +474,10 @@ index 4952543..7cf491b 100644
              ServerNotification::AcpcSessionConfigUpdated(notification) => {
                  self.acpc.options = notification.options;
 diff --git a/codex-rs/tui/src/chatwidget/slash_dispatch.rs b/codex-rs/tui/src/chatwidget/slash_dispatch.rs
-index ee1c21b..479f167 100644
+index f9d1ccb..57e630b 100644
 --- a/codex-rs/tui/src/chatwidget/slash_dispatch.rs
 +++ b/codex-rs/tui/src/chatwidget/slash_dispatch.rs
-@@ -1188,9 +1188,23 @@ impl ChatWidget {
+@@ -1219,9 +1219,23 @@ impl ChatWidget {
          }
  
          let service_tier_commands = self.current_model_service_tier_commands();
@@ -505,10 +505,10 @@ index ee1c21b..479f167 100644
                  format!(
                      r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#
 diff --git a/codex-rs/tui/src/slash_command.rs b/codex-rs/tui/src/slash_command.rs
-index dd614df..18f8ae6 100644
+index 443f26d..f5df1f5 100644
 --- a/codex-rs/tui/src/slash_command.rs
 +++ b/codex-rs/tui/src/slash_command.rs
-@@ -313,6 +313,9 @@ impl SlashCommand {
+@@ -322,6 +322,9 @@ impl SlashCommand {
      }
  
      fn is_visible(self) -> bool {

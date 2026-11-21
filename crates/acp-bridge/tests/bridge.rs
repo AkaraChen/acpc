@@ -314,6 +314,48 @@ async fn model_list_and_settings_follow_config_options() {
     assert_eq!(read["thread"]["model"], "large");
 }
 
+#[tokio::test]
+async fn default_model_saved_by_the_client_starts_later_sessions() {
+    let mut harness = Harness::start(HarnessConfig {
+        scenario: Some(scenario_with_models()),
+        ..HarnessConfig::default()
+    })
+    .await;
+    let first = harness
+        .request("thread/start", json!({}))
+        .await
+        .expect("start");
+    assert_eq!(first["model"], "small");
+
+    // `/model` → "set as default" writes the TUI's config.toml.
+    harness
+        .request(
+            "config/batchWrite",
+            json!({"edits": [
+                {"keyPath": "model", "value": "large", "mergeStrategy": "replace"},
+                {"keyPath": "model_reasoning_effort", "value": "high", "mergeStrategy": "replace"},
+                {"keyPath": "tui.theme", "value": "dracula", "mergeStrategy": "replace"},
+            ]}),
+        )
+        .await
+        .expect("config/batchWrite");
+    let saved =
+        std::fs::read_to_string(harness.state_dir.path().join("config.toml")).expect("config.toml");
+    assert!(saved.contains("model = \"large\""), "{saved}");
+    assert!(
+        saved.contains("model_reasoning_effort = \"high\""),
+        "{saved}"
+    );
+    assert!(!saved.contains("dracula"), "{saved}");
+
+    let second = harness
+        .request("thread/start", json!({}))
+        .await
+        .expect("start");
+    assert_eq!(second["model"], "large");
+    assert_eq!(second["reasoningEffort"], "high");
+}
+
 fn scenario_with_history() -> Value {
     json!({
         "sessions": [{
@@ -330,6 +372,41 @@ fn scenario_with_history() -> Value {
             ]
         }]
     })
+}
+
+#[tokio::test]
+async fn agent_picker_queries_list_no_sessions() {
+    // The TUI's agent picker asks for a thread's spawned agents and for
+    // archived threads. ACP sessions are neither; listing them there marks
+    // the open conversation archived, and the TUI then refuses to send.
+    let mut harness = Harness::start(HarnessConfig {
+        scenario: Some(scenario_with_history()),
+        ..HarnessConfig::default()
+    })
+    .await;
+    let listed = |list: &serde_json::Value| list["data"].as_array().expect("data").len();
+    let all = harness
+        .request("thread/list", json!({}))
+        .await
+        .expect("thread/list");
+    assert!(listed(&all) > 0);
+    let interactive = harness
+        .request("thread/list", json!({"sourceKinds": ["cli", "vscode"]}))
+        .await
+        .expect("thread/list");
+    assert_eq!(listed(&interactive), listed(&all));
+    for params in [
+        json!({"archived": true}),
+        json!({"sourceKinds": ["subAgentThreadSpawn"], "archived": false}),
+        json!({"ancestorThreadId": "00000000-0000-0000-0000-000000000000"}),
+        json!({"parentThreadId": "00000000-0000-0000-0000-000000000000"}),
+    ] {
+        let list = harness
+            .request("thread/list", params.clone())
+            .await
+            .expect("thread/list");
+        assert_eq!(listed(&list), 0, "{params}");
+    }
 }
 
 #[tokio::test]

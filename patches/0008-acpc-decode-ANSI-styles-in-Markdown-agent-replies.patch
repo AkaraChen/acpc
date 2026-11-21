@@ -5,26 +5,26 @@ Subject: [PATCH] acpc: decode ANSI styles in Markdown agent replies
 
 Convert agent-supplied ANSI styling into terminal spans before wrapping and table measurement. Preserve Markdown styles across SGR resets and keep original protocol source offsets. Gate the behavior on acpc mode and cover bilingual replies, colors, controls, tables and streaming suffixes with regression tests.
 ---
- codex-rs/tui/src/markdown_render.rs           |  42 +++-
+ codex-rs/tui/src/markdown_render.rs           |  46 +++-
  codex-rs/tui/src/markdown_render/acpc_ansi.rs |  98 +++++++++
  .../src/markdown_render/acpc_ansi_tests.rs    | 199 ++++++++++++++++++
- 3 files changed, 337 insertions(+), 2 deletions(-)
+ 3 files changed, 334 insertions(+), 9 deletions(-)
  create mode 100644 codex-rs/tui/src/markdown_render/acpc_ansi.rs
  create mode 100644 codex-rs/tui/src/markdown_render/acpc_ansi_tests.rs
 
 diff --git a/codex-rs/tui/src/markdown_render.rs b/codex-rs/tui/src/markdown_render.rs
-index 69459f7..41217b8 100644
+index e5d2830..b828840 100644
 --- a/codex-rs/tui/src/markdown_render.rs
 +++ b/codex-rs/tui/src/markdown_render.rs
-@@ -77,6 +77,7 @@ use std::ops::Range;
- use std::path::Path;
+@@ -78,6 +78,7 @@ use std::path::Path;
  use std::path::PathBuf;
+ use unicode_segmentation::UnicodeSegmentation;
  
 +mod acpc_ansi;
  mod inline_directives;
  mod list_spacing;
  mod local_links;
-@@ -99,6 +100,9 @@ use local_links::render_local_link_target;
+@@ -104,6 +105,9 @@ use local_links::render_local_link_target;
  pub(crate) use streaming::StreamingMarkdownRender;
  pub(crate) use streaming::render_streaming_markdown_lines_with_width_and_cwd;
  #[cfg(test)]
@@ -34,7 +34,7 @@ index 69459f7..41217b8 100644
  #[path = "markdown_render/list_spacing_tests.rs"]
  mod list_spacing_tests;
  #[cfg(test)]
-@@ -510,6 +514,7 @@ struct Writer<'a, 'policy> {
+@@ -538,6 +542,7 @@ struct Writer<'a, 'policy> {
      text: Vec<HyperlinkLine>,
      styles: MarkdownStyles,
      inline_styles: Vec<Style>,
@@ -42,7 +42,7 @@ index 69459f7..41217b8 100644
      copy_inline: Vec<crate::markdown_copy::Inline>,
      copy_line: crate::markdown_copy::CopyLine,
      quote_sources: Vec<std::sync::Arc<str>>,
-@@ -557,6 +562,7 @@ impl<'a, 'policy> Writer<'a, 'policy> {
+@@ -585,6 +590,7 @@ impl<'a, 'policy> Writer<'a, 'policy> {
              text: Vec::new(),
              styles: MarkdownStyles::default(),
              inline_styles: Vec::new(),
@@ -50,7 +50,7 @@ index 69459f7..41217b8 100644
              copy_inline: Vec::new(),
              copy_line: Default::default(),
              quote_sources: Vec::new(),
-@@ -1402,6 +1408,12 @@ impl<'a, 'policy> Writer<'a, 'policy> {
+@@ -1430,6 +1436,12 @@ impl<'a, 'policy> Writer<'a, 'policy> {
      }
  
      fn push_span_to_table_cell(&mut self, span: Span<'static>) {
@@ -61,25 +61,28 @@ index 69459f7..41217b8 100644
 +
 +    fn push_span_to_table_cell_decoded(&mut self, span: Span<'static>) {
          let span = self.style_link_label(span);
-         let mut annotated = HyperlinkLine::new(Line::default());
-         annotated.push_span(
-@@ -1434,7 +1446,14 @@ impl<'a, 'policy> Writer<'a, 'policy> {
+         let annotated = if let Some(path) = self.label_document_path() {
+             self.document_label_span(span, path)
+@@ -1465,11 +1477,13 @@ impl<'a, 'policy> Writer<'a, 'policy> {
+             if i > 0 {
+                 self.push_table_cell_hard_break();
+             }
+-            let annotated = self.annotate_text_span(line, style);
+-            if let Some(table_state) = self.table_state.as_mut()
+-                && let Some(cell) = table_state.current_cell.as_mut()
+-            {
+-                cell.push_annotated(annotated, &self.copy_inline);
++            for span in self.ansi_text.spans(Span::styled(line.to_string(), style)) {
++                let annotated = self.annotate_span(span);
++                if let Some(table_state) = self.table_state.as_mut()
++                    && let Some(cell) = table_state.current_cell.as_mut()
++                {
++                    cell.push_annotated(annotated, &self.copy_inline);
++                }
+             }
+         }
      }
- 
-     fn push_text_spans_to_table_cell(&mut self, text: &str, style: Style) {
--        let span = self.style_link_label(Span::styled(text.to_string(), style));
-+        let span = Span::styled(text.to_string(), style);
-+        for span in self.ansi_text.spans(span) {
-+            self.push_text_spans_to_table_cell_decoded(span);
-+        }
-+    }
-+
-+    fn push_text_spans_to_table_cell_decoded(&mut self, span: Span<'static>) {
-+        let span = self.style_link_label(span);
-         let destination = self
-             .link
-             .as_ref()
-@@ -2368,6 +2387,12 @@ impl<'a, 'policy> Writer<'a, 'policy> {
+@@ -2480,6 +2494,12 @@ impl<'a, 'policy> Writer<'a, 'policy> {
      }
  
      fn push_local_link_label_span(&mut self, span: Span<'static>) {
@@ -92,7 +95,7 @@ index 69459f7..41217b8 100644
          if let Some(link) = self.link.as_mut() {
              link.local_label_spans.push(span);
              link.local_label_inline.push(
-@@ -2521,6 +2546,12 @@ impl<'a, 'policy> Writer<'a, 'policy> {
+@@ -2638,6 +2658,12 @@ impl<'a, 'policy> Writer<'a, 'policy> {
      }
  
      fn push_span(&mut self, span: Span<'static>) {
@@ -105,18 +108,21 @@ index 69459f7..41217b8 100644
          let span = self.style_link_label(span);
          if self.current_line_content.is_none() {
              self.push_line(Line::default());
-@@ -2560,7 +2591,14 @@ impl<'a, 'policy> Writer<'a, 'policy> {
+@@ -2685,12 +2711,14 @@ impl<'a, 'policy> Writer<'a, 'policy> {
      }
  
      fn push_text_spans(&mut self, text: &str, style: Style) {
--        let span = self.style_link_label(Span::styled(text.to_string(), style));
-+        let span = Span::styled(text.to_string(), style);
-+        for span in self.ansi_text.spans(span) {
-+            self.push_text_spans_decoded(span);
+-        let annotated = self.annotate_text_span(text, style);
+-        self.push_annotated(annotated);
++        for span in self.ansi_text.spans(Span::styled(text.to_string(), style)) {
++            let annotated = self.annotate_span(span);
++            self.push_annotated(annotated);
 +        }
-+    }
-+
-+    fn push_text_spans_decoded(&mut self, span: Span<'static>) {
+     }
+ 
+-    fn annotate_text_span(&mut self, text: &str, style: Style) -> HyperlinkLine {
+-        let span = self.style_link_label(Span::styled(text.to_string(), style));
++    fn annotate_span(&mut self, span: Span<'static>) -> HyperlinkLine {
 +        let span = self.style_link_label(span);
          let destination = self
              .link

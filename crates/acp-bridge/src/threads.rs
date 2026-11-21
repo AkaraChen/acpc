@@ -456,8 +456,49 @@ pub(crate) fn start(
     );
 }
 
+/// A new session starts with the default model and effort `/model` saved,
+/// when the agent offers them.
 #[allow(clippy::too_many_arguments)]
 fn adopt_new_session(
+    bridge: &mut Bridge,
+    conn: ConnectionId,
+    id: RequestId,
+    agent: &str,
+    cwd: AbsolutePathBuf,
+    connection: &Arc<AgentConnection>,
+    mut response: acp::NewSessionResponse,
+    fork: Option<String>,
+) {
+    let settings = crate::config_write::saved_defaults(
+        bridge.options.codex_home.join("config.toml").as_path(),
+    );
+    let Some(options) = response
+        .config_options
+        .clone()
+        .filter(|_| settings.model.is_some() || settings.effort.is_some())
+    else {
+        adopt_new_session_now(bridge, conn, id, agent, cwd, connection, response, fork);
+        return;
+    };
+    let connection = Arc::clone(connection);
+    let agent = agent.to_string();
+    let session_id = response.session_id.clone();
+    bridge.spawn(async move {
+        let (updated, error) = settings.apply(&connection, &session_id, options).await;
+        if let Some(error) = error {
+            tracing::warn!("failed to apply the saved default model: {error}");
+        }
+        move |bridge: &mut Bridge| {
+            if updated.is_some() {
+                response.config_options = updated;
+            }
+            adopt_new_session_now(bridge, conn, id, &agent, cwd, &connection, response, fork);
+        }
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn adopt_new_session_now(
     bridge: &mut Bridge,
     conn: ConnectionId,
     id: RequestId,

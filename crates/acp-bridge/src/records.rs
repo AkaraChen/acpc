@@ -94,6 +94,7 @@ pub(crate) fn thread(state: &ThreadState, include_turns: bool) -> Thread {
         id: state.id.clone(),
         environments: None,
         extra: None,
+        attached_to_thread_id: None,
         session_id: state.id.clone(),
         forked_from_id: state
             .forked_from
@@ -122,7 +123,7 @@ pub(crate) fn thread(state: &ThreadState, include_turns: bool) -> Thread {
             ThreadStatus::NotLoaded
         },
         path: None,
-        cwd: state.cwd.clone(),
+        cwd: state.cwd.clone().into(),
         cli_version: CLI_VERSION.to_string(),
         originator: Some("acpc".to_string()),
         source: SessionSource::Cli,
@@ -177,7 +178,7 @@ pub(crate) fn thread_start_response(state: &ThreadState, yolo: bool) -> ThreadSt
         model_provider: state.agent.clone(),
         service_tier: None,
         disabled_plugin_ids: Vec::new(),
-        cwd: state.cwd.clone(),
+        cwd: state.cwd.clone().into(),
         runtime_workspace_roots: Vec::new(),
         instruction_sources: Vec::new(),
         approval_policy: approval_policy(yolo),
@@ -196,7 +197,7 @@ pub(crate) fn thread_fork_response(state: &ThreadState, yolo: bool) -> ThreadFor
         model_provider: state.agent.clone(),
         service_tier: None,
         disabled_plugin_ids: Vec::new(),
-        cwd: state.cwd.clone(),
+        cwd: state.cwd.clone().into(),
         runtime_workspace_roots: Vec::new(),
         instruction_sources: Vec::new(),
         approval_policy: approval_policy(yolo),
@@ -215,7 +216,7 @@ pub(crate) fn thread_resume_response(state: &ThreadState, yolo: bool) -> ThreadR
         model_provider: state.agent.clone(),
         service_tier: None,
         disabled_plugin_ids: Vec::new(),
-        cwd: state.cwd.clone(),
+        cwd: state.cwd.clone().into(),
         runtime_workspace_roots: Vec::new(),
         instruction_sources: Vec::new(),
         approval_policy: approval_policy(yolo),
@@ -234,8 +235,9 @@ pub(crate) fn thread_resume_response(state: &ThreadState, yolo: bool) -> ThreadR
 pub(crate) fn thread_settings(state: &ThreadState, yolo: bool) -> ThreadSettings {
     let model = state.model_label();
     ThreadSettings {
+        environments: None,
         disabled_plugin_ids: Vec::new(),
-        cwd: state.cwd.clone(),
+        cwd: state.cwd.clone().into(),
         approval_policy: approval_policy(yolo),
         approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: sandbox_policy(yolo),
