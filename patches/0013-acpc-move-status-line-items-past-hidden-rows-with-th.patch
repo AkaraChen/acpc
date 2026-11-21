@@ -1,0 +1,198 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: jimmy <tliang92@gmail.com>
+Date: Sat, 21 Nov 2026 21:19:02 +0800
+Subject: [PATCH] acpc: move status line items past hidden rows with the arrow
+ keys
+
+In the /statusline picker a shown item now swaps with the next shown item
+instead of the next row, so a line break enabled at the bottom of the list
+reaches its place in a press or two. The line break rows say how to use them.
+---
+ .../src/bottom_pane/multi_select_picker.rs    | 82 ++++++++++++++++++-
+ ...nders_checkboxes_preview_and_overflow.snap | 28 +++----
+ .../tui/src/bottom_pane/status_line_setup.rs  |  8 +-
+ 3 files changed, 98 insertions(+), 20 deletions(-)
+
+diff --git a/codex-rs/tui/src/bottom_pane/multi_select_picker.rs b/codex-rs/tui/src/bottom_pane/multi_select_picker.rs
+index a97597c..aa3afaf 100644
+--- a/codex-rs/tui/src/bottom_pane/multi_select_picker.rs
++++ b/codex-rs/tui/src/bottom_pane/multi_select_picker.rs
+@@ -465,10 +465,27 @@ impl MultiSelectPicker {
+             return;
+         }
+ 
+-        let new_idx = match direction {
+-            Direction::Up if actual_idx > 0 => actual_idx - 1,
+-            Direction::Down if actual_idx + 1 < len => actual_idx + 1,
+-            _ => return,
++        // A shown item passes the next shown one and skips the hidden rows between: the order
++        // that matters is the order of what is shown, and a row that starts disabled (a line
++        // break, for one) would otherwise need a key press per hidden row to reach its place.
++        let step = |from: usize| match direction {
++            Direction::Up => from.checked_sub(1),
++            Direction::Down => Some(from + 1).filter(|next| *next < len),
++        };
++        let shown = self.items[actual_idx].enabled;
++        let mut new_idx = step(actual_idx);
++        if shown {
++            while let Some(idx) = new_idx
++                && self
++                    .items
++                    .get(idx)
++                    .is_some_and(|item| item.orderable && !item.enabled)
++            {
++                new_idx = step(idx);
++            }
++        }
++        let Some(new_idx) = new_idx else {
++            return;
+         };
+ 
+         if !self.items.get(new_idx).is_some_and(|item| item.orderable) {
+@@ -1004,6 +1021,63 @@ pub(super) mod tests {
+         );
+     }
+ 
++    #[test]
++    fn a_shown_item_skips_hidden_rows_when_moved() {
++        let shown = |id: &str| MultiSelectItem {
++            enabled: true,
++            ..item(
++                id, /*orderable*/ true, /*section_break_after*/ false,
++            )
++        };
++        let hidden = |id: &str| {
++            item(
++                id, /*orderable*/ true, /*section_break_after*/ false,
++            )
++        };
++        let ids = |picker: &MultiSelectPicker| {
++            picker
++                .items
++                .iter()
++                .map(|item| item.id.clone())
++                .collect::<Vec<_>>()
++        };
++        // Shown: model, branch, break. Hidden rows sit between and after them.
++        let mut picker = test_picker(vec![
++            shown("model"),
++            shown("branch"),
++            hidden("a"),
++            hidden("b"),
++            hidden("c"),
++            shown("break"),
++            hidden("d"),
++        ]);
++        picker.state.selected_idx = Some(5);
++
++        picker.move_selected_item(Direction::Up);
++        assert_eq!(
++            ids(&picker),
++            ["model", "break", "a", "b", "c", "branch", "d"]
++        );
++        picker.move_selected_item(Direction::Up);
++        assert_eq!(
++            ids(&picker),
++            ["break", "model", "a", "b", "c", "branch", "d"]
++        );
++        // Already first among the shown ones.
++        picker.move_selected_item(Direction::Up);
++        assert_eq!(
++            ids(&picker),
++            ["break", "model", "a", "b", "c", "branch", "d"]
++        );
++        // The last shown one does not walk off through the hidden rows.
++        picker.state.selected_idx = Some(5);
++        picker.move_selected_item(Direction::Down);
++        assert_eq!(
++            ids(&picker),
++            ["break", "model", "a", "b", "c", "branch", "d"]
++        );
++    }
++
+     #[test]
+     fn horizontal_list_keys_reorder_orderable_items() {
+         let mut picker = test_picker(vec![
+diff --git a/codex-rs/tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__multi_select_picker__tests__picker_appearance_renders_checkboxes_preview_and_overflow.snap b/codex-rs/tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__multi_select_picker__tests__picker_appearance_renders_checkboxes_preview_and_overflow.snap
+index ecfb407..1bfa6ad 100644
+--- a/codex-rs/tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__multi_select_picker__tests__picker_appearance_renders_checkboxes_preview_and_overflow.snap
++++ b/codex-rs/tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__multi_select_picker__tests__picker_appearance_renders_checkboxes_preview_and_overflow.snap
+@@ -67,17 +67,17 @@ Buffer {
+         "  Status line                                   ",
+         "                                                ",
+         "  Type to search                                ",
+-        "↑                                               ",
++        "                                                ",
++        "› [x] Field 11  Status detail                   ",
++        "  [ ] Field 1   Status detail                   ",
++        "  [ ] Field 2   Status detail                   ",
++        "  [ ] Field 3   Status detail                   ",
+         "  [ ] Field 4   Status detail                   ",
+         "  [ ] Field 5   Status detail                   ",
+         "  [ ] Field 6   Status detail                   ",
+         "  [ ] Field 7   Status detail                   ",
+-        "  [ ] Field 8   Status detail                   ",
+-        "  [ ] Field 9   Status detail                   ",
+-        "› [x] Field 11  Status detail                   ",
+-        "  [ ] Field 10  Status detail                   ",
+-        "                                                ",
+-        "  Field 0 · Field 11                            ",
++        "↓                                               ",
++        "  Field 11 · Field 0                            ",
+         "  space toggle · ←/→ reorder · enter save · esc ",
+         "  cancel                                        ",
+     ],
+@@ -87,8 +87,10 @@ Buffer {
+         x: 13, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+         x: 2, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+         x: 16, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+-        x: 16, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+-        x: 29, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
++        x: 0, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD | REVERSED,
++        x: 16, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
++        x: 29, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD | REVERSED,
++        x: 0, y: 6, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+         x: 16, y: 6, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+         x: 29, y: 6, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+         x: 16, y: 7, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+@@ -99,10 +101,8 @@ Buffer {
+         x: 29, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+         x: 16, y: 10, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+         x: 29, y: 10, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+-        x: 0, y: 11, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD | REVERSED,
+-        x: 16, y: 11, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
+-        x: 29, y: 11, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD | REVERSED,
+-        x: 0, y: 12, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
++        x: 16, y: 11, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
++        x: 29, y: 11, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+         x: 16, y: 12, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+         x: 29, y: 12, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+         x: 2, y: 15, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+@@ -128,7 +128,7 @@ Buffer {
+         "                                                ",
+         "no matches                                      ",
+         "                                                ",
+-        "  Field 0 · Field 11                            ",
++        "  Field 11 · Field 0                            ",
+         "  space toggle · ←/→ reorder · enter save · esc ",
+         "  cancel                                        ",
+     ],
+diff --git a/codex-rs/tui/src/bottom_pane/status_line_setup.rs b/codex-rs/tui/src/bottom_pane/status_line_setup.rs
+index b65ea58..30f606b 100644
+--- a/codex-rs/tui/src/bottom_pane/status_line_setup.rs
++++ b/codex-rs/tui/src/bottom_pane/status_line_setup.rs
+@@ -245,8 +245,12 @@ impl StatusLineItem {
+             StatusLineItem::TaskProgress => {
+                 "Latest task progress from update_plan (omitted until available)"
+             }
+-            StatusLineItem::LineBreak => "Start a new row here",
+-            StatusLineItem::LineBreak2 => "Start another new row here",
++            StatusLineItem::LineBreak => {
++                "Start a new row here (enable it, then press ← to move it between items)"
++            }
++            StatusLineItem::LineBreak2 => {
++                "Start another new row here (enable it, then press ← to move it into place)"
++            }
+         }
+     }
+ 
