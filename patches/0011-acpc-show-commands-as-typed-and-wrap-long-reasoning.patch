@@ -1,0 +1,184 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: jimmy <tliang92@gmail.com>
+Date: Sat, 21 Nov 2026 19:43:47 +0800
+Subject: [PATCH] acpc: show commands as typed and wrap long reasoning
+
+- split_command_string keeps a command that shlex would rewrite (&&, |,
+  >, quote styles) in one piece, so it is not shown as ls '&&' cat a.
+- A reasoning summary line wider than a title is shown wrapped under a
+  short "Thinking" header instead of cut off at one row.
+---
+ codex-rs/tui/src/chatwidget/streaming.rs | 77 ++++++++++++++++++++++--
+ codex-rs/tui/src/exec_command.rs         | 28 ++++++---
+ 2 files changed, 92 insertions(+), 13 deletions(-)
+
+diff --git a/codex-rs/tui/src/chatwidget/streaming.rs b/codex-rs/tui/src/chatwidget/streaming.rs
+index 8845104..1ef64ce 100644
+--- a/codex-rs/tui/src/chatwidget/streaming.rs
++++ b/codex-rs/tui/src/chatwidget/streaming.rs
+@@ -30,7 +30,39 @@ fn latest_summary_line(text: &str) -> Option<String> {
+     })
+ }
+ 
++/// Wider than this, a reasoning "header" is a sentence, not a title.
++const LONG_REASONING_HEADER_WIDTH: usize = 48;
++/// Rows of wrapped text under "Thinking" for such a sentence.
++const LONG_REASONING_DETAILS_MAX_LINES: usize = 6;
++
++/// What the status indicator shows for a reasoning summary line.
++///
++/// Codex models send a short bold title, which fits the one-row header. An
++/// ACP agent's thoughts are plain prose; as a header it would be cut off at
++/// the first row, so the prose goes under a short header, where it wraps.
++fn reasoning_status(summary: &str) -> (String, Option<String>, usize) {
++    if crate::width::display_width(summary) > LONG_REASONING_HEADER_WIDTH {
++        (
++            String::from("Thinking"),
++            Some(summary.to_string()),
++            LONG_REASONING_DETAILS_MAX_LINES,
++        )
++    } else {
++        (summary.to_string(), None, STATUS_DETAILS_DEFAULT_MAX_LINES)
++    }
++}
++
+ impl ChatWidget {
++    fn set_reasoning_status(&mut self, summary: &str) -> bool {
++        let (header, details, max_lines) = reasoning_status(summary);
++        self.set_status(
++            header,
++            details,
++            StatusDetailsCapitalization::Preserve,
++            max_lines,
++        )
++    }
++
+     pub(super) fn on_reasoning_item_started(&mut self, id: String) {
+         if self.status_state.reasoning_resume_turn_id.take().is_some()
+             && self.status_state.reasoning_item_id.as_ref() != Some(&id)
+@@ -58,7 +90,7 @@ impl ChatWidget {
+             latest_summary_line(&self.reasoning_buffer).or(self.reasoning_header.take());
+         if let Some(header) = self.reasoning_header.clone() {
+             self.status_state.terminal_title_status_kind = TerminalTitleStatusKind::Thinking;
+-            self.set_status_header(header);
++            self.set_reasoning_status(&header);
+         } else if self.bottom_pane.is_task_running()
+             || self.status_state.current_status.is_guardian_review()
+         {
+@@ -457,15 +489,16 @@ impl ChatWidget {
+             return;
+         };
+ 
++        let (shown_header, details, max_lines) = reasoning_status(header);
+         let status = &self.status_state.current_status;
+         if self.status_state.terminal_title_status_kind == TerminalTitleStatusKind::Thinking
+-            && status.header == header
+-            && status.details.is_none()
+-            && status.details_max_lines == STATUS_DETAILS_DEFAULT_MAX_LINES
++            && status.header == shown_header
++            && status.details == details
++            && status.details_max_lines == max_lines
+             && self
+                 .bottom_pane
+                 .status_widget()
+-                .is_none_or(|status| status.header() == header)
++                .is_none_or(|status| status.header() == shown_header)
+         {
+             return;
+         }
+@@ -473,7 +506,7 @@ impl ChatWidget {
+         // Update the shimmer header to the extracted reasoning chunk header.
+         let header = header.to_string();
+         self.status_state.terminal_title_status_kind = TerminalTitleStatusKind::Thinking;
+-        if !self.set_status_header(header) {
++        if !self.set_reasoning_status(&header) {
+             self.request_redraw();
+         }
+     }
+@@ -975,3 +1008,35 @@ impl ChatWidget {
+         false
+     }
+ }
++
++#[cfg(test)]
++mod reasoning_status_tests {
++    use super::*;
++    use pretty_assertions::assert_eq;
++
++    #[test]
++    fn short_reasoning_titles_stay_in_the_header() {
++        assert_eq!(
++            reasoning_status("Planning next steps"),
++            (
++                "Planning next steps".to_string(),
++                None,
++                STATUS_DETAILS_DEFAULT_MAX_LINES
++            )
++        );
++    }
++
++    #[test]
++    fn reasoning_prose_wraps_under_a_short_header() {
++        let prose =
++            "根因找到了：上游的 split_command_string 会拆开再重拼命令，把 && 当普通参数加引号";
++        assert_eq!(
++            reasoning_status(prose),
++            (
++                "Thinking".to_string(),
++                Some(prose.to_string()),
++                LONG_REASONING_DETAILS_MAX_LINES
++            )
++        );
++    }
++}
+diff --git a/codex-rs/tui/src/exec_command.rs b/codex-rs/tui/src/exec_command.rs
+index 0083e1d..d9ef4be 100644
+--- a/codex-rs/tui/src/exec_command.rs
++++ b/codex-rs/tui/src/exec_command.rs
+@@ -16,18 +16,16 @@ pub(crate) fn strip_bash_lc_and_escape(command: &[String]) -> String {
+     escape_command(command)
+ }
+ 
++/// Split a command string into words, only when joining them again gives back
++/// the same string. Anything else (shell operators such as `&&` or `|`, quote
++/// styles shlex rewrites) stays one piece: the words would be shown re-quoted
++/// (`ls '&&' cat a`) instead of as typed.
+ pub(crate) fn split_command_string(command: &str) -> Vec<String> {
+     let Some(parts) = shlex::split(command) else {
+         return vec![command.to_string()];
+     };
+     match shlex::try_join(parts.iter().map(String::as_str)) {
+-        Ok(round_trip)
+-            if round_trip == command
+-                || (!command.contains(":\\")
+-                    && shlex::split(&round_trip).as_ref() == Some(&parts)) =>
+-        {
+-            parts
+-        }
++        Ok(round_trip) if round_trip == command => parts,
+         _ => vec![command.to_string()],
+     }
+ }
+@@ -99,6 +97,22 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn split_command_string_keeps_shell_operators_unquoted() {
++        for command in [
++            "ls -la && cat a.txt",
++            "cat a.txt | wc -l",
++            r#"echo "hi there" > out.txt"#,
++            "git status; git diff",
++        ] {
++            assert_eq!(split_command_string(command), vec![command.to_string()]);
++        }
++        assert_eq!(
++            split_command_string("ls -la src"),
++            vec!["ls".to_string(), "-la".to_string(), "src".to_string()]
++        );
++    }
++
+     #[test]
+     fn split_command_string_preserves_non_roundtrippable_windows_commands() {
+         let command = r#"C:\Program Files\Git\bin\bash.exe -lc "echo hi""#;
