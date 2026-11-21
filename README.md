@@ -145,7 +145,7 @@ Inside the TUI:
 | | |
 |---|---|
 | `/agent` | Switch agents. If the session has messages, choose **Bring this conversation** to fork it onto the new agent, or **Start fresh**. |
-| `/model` | The agent's models and reasoning levels. |
+| `/model` | The agent's models and reasoning levels. Enter keeps the choice as the default for new sessions; `s` applies it to this session only. |
 | `/options` | The agent's other session settings and modes. |
 | Shift+Tab | Cycle the agent's modes. |
 | `/resume` | Reopen an earlier session, including forks; they show where they came from. |

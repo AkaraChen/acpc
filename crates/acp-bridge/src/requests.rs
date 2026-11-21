@@ -93,10 +93,19 @@ pub(crate) fn dispatch(bridge: &mut Bridge, conn: ConnectionId, request: ClientR
                 serde_json::json!({ "config": {}, "origins": {} }),
             );
         }
-        // The TUI persists preferences (e.g. the default model) into its
-        // config file. acpc's agent settings live in the agent session, so
-        // accept and drop the write.
-        ClientRequest::ConfigValueWrite { request_id, .. } => {
+        // The TUI persists preferences into its config file through these
+        // requests. acpc's agent settings live in the agent session, so the
+        // writes are accepted and dropped, except the default model and
+        // effort, which later sessions start with.
+        ClientRequest::ConfigValueWrite { request_id, params } => {
+            save_config_edits(
+                bridge,
+                &[codex_app_server_protocol::ConfigEdit {
+                    key_path: params.key_path,
+                    value: params.value,
+                    merge_strategy: params.merge_strategy,
+                }],
+            );
             let response = config_write_response(bridge);
             bridge.respond(
                 conn,
@@ -104,7 +113,8 @@ pub(crate) fn dispatch(bridge: &mut Bridge, conn: ConnectionId, request: ClientR
                 ClientResponsePayload::ConfigValueWrite(response),
             );
         }
-        ClientRequest::ConfigBatchWrite { request_id, .. } => {
+        ClientRequest::ConfigBatchWrite { request_id, params } => {
+            save_config_edits(bridge, &params.edits);
             let response = config_write_response(bridge);
             bridge.respond(
                 conn,
@@ -374,6 +384,13 @@ pub(crate) fn dispatch(bridge: &mut Bridge, conn: ConnectionId, request: ClientR
                 format!("acpc does not support `{method}`"),
             );
         }
+    }
+}
+
+fn save_config_edits(bridge: &Bridge, edits: &[codex_app_server_protocol::ConfigEdit]) {
+    let path = bridge.options.codex_home.join("config.toml");
+    if let Err(err) = crate::config_write::save_edits(path.as_path(), edits) {
+        tracing::warn!(%err, "failed to save the default model");
     }
 }
 

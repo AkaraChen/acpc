@@ -314,6 +314,48 @@ async fn model_list_and_settings_follow_config_options() {
     assert_eq!(read["thread"]["model"], "large");
 }
 
+#[tokio::test]
+async fn default_model_saved_by_the_client_starts_later_sessions() {
+    let mut harness = Harness::start(HarnessConfig {
+        scenario: Some(scenario_with_models()),
+        ..HarnessConfig::default()
+    })
+    .await;
+    let first = harness
+        .request("thread/start", json!({}))
+        .await
+        .expect("start");
+    assert_eq!(first["model"], "small");
+
+    // `/model` → "set as default" writes the TUI's config.toml.
+    harness
+        .request(
+            "config/batchWrite",
+            json!({"edits": [
+                {"keyPath": "model", "value": "large", "mergeStrategy": "replace"},
+                {"keyPath": "model_reasoning_effort", "value": "high", "mergeStrategy": "replace"},
+                {"keyPath": "tui.theme", "value": "dracula", "mergeStrategy": "replace"},
+            ]}),
+        )
+        .await
+        .expect("config/batchWrite");
+    let saved =
+        std::fs::read_to_string(harness.state_dir.path().join("config.toml")).expect("config.toml");
+    assert!(saved.contains("model = \"large\""), "{saved}");
+    assert!(
+        saved.contains("model_reasoning_effort = \"high\""),
+        "{saved}"
+    );
+    assert!(!saved.contains("dracula"), "{saved}");
+
+    let second = harness
+        .request("thread/start", json!({}))
+        .await
+        .expect("start");
+    assert_eq!(second["model"], "large");
+    assert_eq!(second["reasoningEffort"], "high");
+}
+
 fn scenario_with_history() -> Value {
     json!({
         "sessions": [{
