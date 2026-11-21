@@ -1,0 +1,54 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: jimmy <tliang92@gmail.com>
+Date: Sat, 21 Nov 2026 21:01:35 +0800
+Subject: [PATCH] acpc: show a whole command line without quotes
+
+split_command_string keeps commands with shell operators as one element,
+and strip_bash_lc_and_escape then quoted that element: 'ls && cat a'.
+Show a single-element command as it is.
+---
+ codex-rs/tui/src/exec_command.rs | 24 ++++++++++++++++++++++++
+ 1 file changed, 24 insertions(+)
+
+diff --git a/codex-rs/tui/src/exec_command.rs b/codex-rs/tui/src/exec_command.rs
+index d9ef4be..e23d41c 100644
+--- a/codex-rs/tui/src/exec_command.rs
++++ b/codex-rs/tui/src/exec_command.rs
+@@ -13,6 +13,11 @@ pub(crate) fn strip_bash_lc_and_escape(command: &[String]) -> String {
+     if let Some((_, script)) = extract_shell_command(command) {
+         return script.to_string();
+     }
++    // One element is a command line kept whole (see `split_command_string`);
++    // quoting it would wrap the whole line in quotes.
++    if let [line] = command {
++        return line.clone();
++    }
+     escape_command(command)
+ }
+ 
+@@ -97,6 +102,25 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn a_whole_command_line_is_displayed_without_quotes() {
++        for command in [
++            "ls -la && cat a.txt",
++            "cat a.txt | wc -l",
++            "git status; git diff",
++        ] {
++            assert_eq!(
++                strip_bash_lc_and_escape(&split_command_string(command)),
++                command
++            );
++        }
++        // Separate arguments are still quoted for display.
++        assert_eq!(
++            strip_bash_lc_and_escape(&["echo".to_string(), "a b".to_string()]),
++            "echo 'a b'"
++        );
++    }
++
+     #[test]
+     fn split_command_string_keeps_shell_operators_unquoted() {
+         for command in [
